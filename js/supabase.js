@@ -83,25 +83,31 @@ const db = {
     const recordImages = images || [];
 
     if (type === 'mood' || type === 'diary') {
-      const record = {
-        date,
-        mood: mood || null,
-        note: note || '',
-        type,
-        author: recordAuthor,
-        images: recordImages,
-        created_at: new Date().toISOString()
-      };
-      const { data, error } = await this.client
+      // 查询同一天同一类型同一作者的已有记录
+      const { data: existing } = await this.client
         .from('moods')
-        .upsert(record, { onConflict: 'date, type, author' })
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
+        .select('id, images')
+        .eq('date', date)
+        .eq('type', type)
+        .eq('author', recordAuthor)
+        .maybeSingle();
+
+      if (existing) {
+        const merged = [...(existing.images || []), ...recordImages];
+        const updates = { note: note || '', images: merged };
+        if (mood) updates.mood = mood;
+        updates.created_at = new Date().toISOString();
+        const { data } = await this.client
+          .from('moods')
+          .update(updates)
+          .eq('id', existing.id)
+          .select()
+          .single();
+        return data;
+      }
     }
 
-    // memo 仍用 insert
+    // 新记录（mood/diary 首次，或 memo 每次）
     const record = {
       date,
       mood: mood || null,
