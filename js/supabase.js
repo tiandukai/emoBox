@@ -150,11 +150,12 @@ const db = {
 
   // ==================== DIARIES ====================
 
-  async getDiaries(limit = 30) {
+  async getDiaries(author, limit = 30) {
     const { data } = await this.client
       .from('moods')
       .select('*')
       .eq('type', 'diary')
+      .eq('author', author)
       .order('date', { ascending: false })
       .limit(limit);
     return data || [];

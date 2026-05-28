@@ -35,13 +35,18 @@
 
   function updateIdentityUI() {
     const badge = $('#identity-badge');
+    const partnerNav = $('.nav-btn[data-tab="partner"]');
     const id = getIdentity();
     if (id === 'xiaopang') {
       badge.textContent = '当前是小胖 💝';
       badge.classList.add('xiaopang');
+      partnerNav.classList.remove('hidden');
     } else {
       badge.textContent = '当前是肥纯 🥰';
       badge.classList.remove('xiaopang');
+      partnerNav.classList.add('hidden');
+      // 肥纯端如果在"我们"Tab，切回记录
+      if (currentTab === 'partner') switchTab('record');
     }
   }
 
@@ -178,6 +183,7 @@
         results.push(result.url);
       } catch (e) {
         console.error('照片上传失败:', e);
+        showToast('照片上传失败，请重试');
       }
     }
     pendingArray.length = 0;
@@ -258,7 +264,7 @@
   // 日记
   async function loadDiaryList() {
     try {
-      const diaries = await db.getDiaries();
+      const diaries = await db.getDiaries(getIdentity());
       const list = $('#diary-list');
       if (diaries.length === 0) {
         list.innerHTML = '<p class="empty-hint">还没有日记，点击下方开始记录</p>';
@@ -632,6 +638,11 @@
 
   // ==================== 我们 Tab ====================
   function initPartnerTab() {
+    // 肥纯不能访问此 Tab（导航已隐藏，防御性检查）
+    if (getIdentity() !== 'xiaopang') {
+      switchTab('record');
+      return;
+    }
     if (sessionStorage.getItem('partner_unlocked') === 'true') {
       showPartnerContent();
     } else {
@@ -647,7 +658,6 @@
   function showPartnerContent() {
     $('#partner-gate').classList.add('hidden');
     $('#partner-content').classList.remove('hidden');
-    loadQuoteInventory();
   }
 
   function unlockPartner() {
@@ -665,34 +675,6 @@
     }
   }
 
-  async function loadQuoteInventory() {
-    const inventory = await db.getQuoteInventory();
-    const container = $('#quote-inventory');
-
-    if (Object.keys(inventory).length === 0) {
-      container.innerHTML = '<p style="color:var(--color-text-light);font-size:0.88rem">还没有纸团库存</p>';
-      return;
-    }
-
-    const rows = Object.values(inventory);
-    container.innerHTML = rows.map(r => {
-      const emotion = EMOTIONS.find(e => e.name === r.mood);
-      const emoji = emotion?.emoji || '📝';
-      const color = emotion?.color || '#ccc';
-      const pct = r.total > 0 ? Math.round(r.remaining / r.total * 100) : 0;
-      const authorLabel = r.author === 'xiaopang' ? '小胖' : '肥纯';
-      return `
-        <div class="inventory-row">
-          <span class="inventory-emoji">${emoji}</span>
-          <span class="inventory-name">${r.mood}</span>
-          <span class="inventory-author">${authorLabel}</span>
-          <div class="inventory-bar"><div class="inventory-fill" style="width:${pct}%;background:${color}"></div></div>
-          <span class="inventory-count">${r.remaining}/${r.total}</span>
-        </div>
-      `;
-    }).join('');
-  }
-
   function renderPartnerMoodSelect() {
     const select = $('#new-quote-mood');
     select.innerHTML = EMOTIONS.map(e => `<option value="${e.name}">${e.emoji} ${e.name}</option>`).join('');
@@ -703,10 +685,9 @@
     const content = $('#new-quote-content').value.trim();
     if (!content) { showToast('请输入话语内容'); return; }
     try {
-      await db.addQuote(mood, content, getIdentity());
+      await db.addQuote(mood, content, 'xiaopang');
       $('#new-quote-content').value = '';
-      showToast('纸团已放入');
-      loadQuoteInventory();
+      showToast('纸团已放入 🎁');
     } catch (e) {
       console.error('添加话语失败:', e);
       showToast('添加失败');
