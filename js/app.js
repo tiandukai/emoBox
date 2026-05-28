@@ -1,4 +1,4 @@
-// app.js - 肥纯专属情绪盒子 主逻辑
+// app.js - 肥纯专属情绪盒子 5 Tab 双人互动
 (function () {
   'use strict';
 
@@ -12,12 +12,69 @@
     { emoji: '😰', name: '焦虑', color: '#AB47BC', bg: '#F3E5F5' }
   ];
 
-  // ========== 应用状态 ==========
-  let currentTab = 'mood';
-  let selectedMood = null;
-  let partnerUnlocked = false;
+  // ========== 状态 ==========
+  let currentTab = 'record';
+  let selectedTimelineMood = null;
+  let notebookSegment = 'diary';
+  let quoteEmotionIndex = 0;
+  let diarySaveTimer = null;
+  let timelineOffset = 0;
+  const TIMELINE_PAGE = 20;
+  let pendingDiaryPhotos = [];
+  let pendingTimelinePhotos = [];
 
-  // ========== DOM 引用 ==========
+  // ========== 身份 ==========
+  function getIdentity() {
+    return sessionStorage.getItem('emoBox_identity') || 'feichun';
+  }
+
+  function setIdentity(id) {
+    sessionStorage.setItem('emoBox_identity', id);
+    updateIdentityUI();
+  }
+
+  function updateIdentityUI() {
+    const badge = $('#identity-badge');
+    const id = getIdentity();
+    if (id === 'xiaopang') {
+      badge.textContent = '当前是小胖 💝';
+      badge.classList.add('xiaopang');
+    } else {
+      badge.textContent = '当前是肥纯 🥰';
+      badge.classList.remove('xiaopang');
+    }
+  }
+
+  function otherIdentity() {
+    return getIdentity() === 'feichun' ? 'xiaopang' : 'feichun';
+  }
+
+  function showSwitchPasswordOverlay() {
+    $('#switch-password-overlay').classList.remove('hidden');
+    $('#switch-password-input').value = '';
+    $('#switch-password-error').classList.add('hidden');
+    setTimeout(() => $('#switch-password-input').focus(), 100);
+  }
+
+  function hideSwitchPasswordOverlay() {
+    $('#switch-password-overlay').classList.add('hidden');
+  }
+
+  function confirmSwitch() {
+    const input = $('#switch-password-input').value.trim();
+    if (input === PARTNER_PASSWORD) {
+      setIdentity('xiaopang');
+      sessionStorage.setItem('partner_unlocked', 'true');
+      hideSwitchPasswordOverlay();
+      showToast('已切换为小胖 💝');
+      if (currentTab === 'partner') initPartnerTab();
+    } else {
+      $('#switch-password-error').classList.remove('hidden');
+      $('#switch-password-input').value = '';
+    }
+  }
+
+  // ========== DOM ==========
   function $(sel) { return document.querySelector(sel); }
   function $$(sel) { return document.querySelectorAll(sel); }
 
@@ -47,9 +104,7 @@
   }
 
   // ========== 日期工具 ==========
-  function todayStr() {
-    return new Date().toISOString().split('T')[0];
-  }
+  function todayStr() { return new Date().toISOString().split('T')[0]; }
 
   function formatDate(dateStr) {
     const d = new Date(dateStr);
@@ -62,17 +117,86 @@
     return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 星期${weekdays[d.getDay()]}`;
   }
 
-  // ========== 心情 Tab ==========
-  async function initMoodTab() {
-    renderEmotionSelector();
-    await renderHeatmap();
-    await loadTodayMood();
+  function formatMonth(year, month) {
+    return `${year}年${month}月`;
   }
 
-  function renderEmotionSelector() {
-    const container = $('#emotion-selector');
+  function formatTime(isoStr) {
+    if (!isoStr) return '';
+    return new Date(isoStr).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // ========== 照片通用 ==========
+  function setupPhotoInput(btnId, inputId, previewId, pendingArray) {
+    const btn = $(btnId);
+    const input = $(inputId);
+    const preview = $(previewId);
+
+    btn.addEventListener('click', () => input.click());
+
+    input.addEventListener('change', () => {
+      const files = Array.from(input.files);
+      files.forEach(f => {
+        pendingArray.push(f);
+        renderPhotoPreview(preview, pendingArray);
+      });
+      input.value = '';
+    });
+  }
+
+  function renderPhotoPreview(container, pendingArray) {
+    container.innerHTML = pendingArray.map((f, i) => {
+      const url = URL.createObjectURL(f);
+      return `<div class="photo-thumb" data-index="${i}">
+        <img src="${url}" alt="">
+        <button class="photo-thumb-remove" data-index="${i}">✕</button>
+      </div>`;
+    }).join('');
+
+    container.querySelectorAll('.photo-thumb-remove').forEach(btn => {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const idx = parseInt(this.dataset.index);
+        pendingArray.splice(idx, 1);
+        renderPhotoPreview(container, pendingArray);
+      });
+    });
+  }
+
+  async function uploadPendingPhotos(pendingArray) {
+    if (pendingArray.length === 0) return [];
+    const results = [];
+    for (const file of pendingArray) {
+      try {
+        const result = await db.uploadImage(file);
+        results.push(result.url);
+      } catch (e) {
+        console.error('照片上传失败:', e);
+      }
+    }
+    pendingArray.length = 0;
+    return results;
+  }
+
+  function renderSavedPhotos(container, urls) {
+    container.innerHTML = urls.map(url => `
+      <div class="photo-thumb">
+        <img src="${url}" alt="" onclick="document.querySelector('#lightbox').classList.remove('hidden');document.querySelector('#lightbox-img').src='${url}'">
+      </div>
+    `).join('');
+  }
+
+  // ========== 情绪选择器渲染 ==========
+  function renderEmotionSelector(containerId, selectedIndex, onClick) {
+    const container = $(containerId);
     container.innerHTML = EMOTIONS.map((e, i) => `
-      <button class="emo-btn ${selectedMood === i ? 'selected' : ''}"
+      <button class="emo-btn ${selectedIndex === i ? 'selected' : ''}"
               data-index="${i}"
               style="--emo-color: ${e.color}; --emo-bg: ${e.bg}"
               aria-label="${e.name}">
@@ -84,93 +208,197 @@
     container.querySelectorAll('.emo-btn').forEach(btn => {
       btn.addEventListener('click', function () {
         const idx = parseInt(this.dataset.index);
-        selectedMood = (selectedMood === idx) ? null : idx;
+        const newVal = (selectedIndex === idx) ? null : idx;
+        onClick(newVal);
         container.querySelectorAll('.emo-btn').forEach(b => b.classList.remove('selected'));
-        if (selectedMood !== null) this.classList.add('selected');
+        if (newVal !== null) this.classList.add('selected');
       });
     });
   }
 
-  async function loadTodayMood() {
-    try {
-      const record = await db.getMoodByDate(todayStr());
-      if (record) {
-        const idx = EMOTIONS.findIndex(e => e.name === record.mood);
-        if (idx >= 0) {
-          selectedMood = idx;
-          renderEmotionSelector();
-        }
-        $('#mood-note-input').value = record.note || '';
-      }
-    } catch (e) {
-      console.error('加载今日心情失败:', e);
-    }
-  }
-
-  async function renderHeatmap() {
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 29);
-
-    const startStr = startDate.toISOString().split('T')[0];
-    const endStr = endDate.toISOString().split('T')[0];
-
-    let moodMap = {};
-    try {
-      const records = await db.getMoodsInRange(startStr, endStr);
-      records.forEach(r => { moodMap[r.date] = r.mood; });
-    } catch (e) {
-      console.error('加载热力图失败:', e);
-    }
-
-    const grid = $('#heatmap-grid');
-    grid.innerHTML = '';
-
-    const days = [];
-    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-      days.push(new Date(d));
-    }
-
-    days.forEach(date => {
-      const dateStr = date.toISOString().split('T')[0];
-      const moodName = moodMap[dateStr];
-      const emotion = EMOTIONS.find(e => e.name === moodName);
-      const bgColor = emotion ? emotion.color : '#E8E8E8';
-      const tooltip = moodName
-        ? `${formatDate(dateStr)} · ${moodName}`
-        : formatDate(dateStr);
-
-      const cell = document.createElement('div');
-      cell.className = 'heatmap-cell';
-      cell.style.backgroundColor = bgColor;
-      cell.title = tooltip;
-      cell.setAttribute('aria-label', tooltip);
-      grid.appendChild(cell);
+  // ========== Tab 切换 ==========
+  function setupTabs() {
+    $$('.nav-btn').forEach(btn => {
+      btn.addEventListener('click', function () {
+        switchTab(this.dataset.tab);
+      });
     });
   }
 
-  async function saveMood() {
-    if (selectedMood === null) {
-      showToast('请先选择一个心情哦~');
-      return;
-    }
-    const note = $('#mood-note-input').value.trim();
-    const emotion = EMOTIONS[selectedMood];
+  function switchTab(tab) {
+    currentTab = tab;
+    $$('.tab-content').forEach(s => s.classList.add('hidden'));
+    $(`#tab-${tab}`).classList.remove('hidden');
+    $$('.nav-btn').forEach(b => b.classList.remove('active'));
+    $(`.nav-btn[data-tab="${tab}"]`).classList.add('active');
 
-    try {
-      await db.saveRecord({ date: todayStr(), mood: emotion.name, note, type: 'mood' });
-      playPaperPlane();
-      showToast('心情已记录 ✨');
-      await renderHeatmap();
-    } catch (e) {
-      console.error('保存失败:', e);
-      showToast('保存失败，请稍后再试');
+    if (tab === 'record') initRecordTab();
+    else if (tab === 'quotes') initQuotesTab();
+    else if (tab === 'timeline') initTimelineTab();
+    else if (tab === 'whispers') initWhispersTab();
+    else if (tab === 'partner') initPartnerTab();
+  }
+
+  // ==================== 记录 Tab ====================
+  async function initRecordTab() {
+    $$('.segment-btn').forEach(b => b.classList.remove('active'));
+    const target = document.querySelector(`.segment-btn[data-segment="${notebookSegment}"]`);
+    if (target) target.classList.add('active');
+
+    $$('.segment-panel').forEach(p => p.classList.add('hidden'));
+    if (notebookSegment === 'diary') {
+      $('#segment-diary').classList.remove('hidden');
+      loadDiaryList();
+    } else {
+      $('#segment-memo').classList.remove('hidden');
+      loadMemoList();
     }
   }
 
-  // ========== 纸团 Tab ==========
-  let quoteEmotionIndex = 0;
+  // 日记
+  async function loadDiaryList() {
+    try {
+      const diaries = await db.getDiaries();
+      const list = $('#diary-list');
+      if (diaries.length === 0) {
+        list.innerHTML = '<p class="empty-hint">还没有日记，点击下方开始记录</p>';
+        return;
+      }
+      list.innerHTML = diaries.map(d => `
+        <div class="diary-item" data-date="${d.date}" data-author="${d.author || 'feichun'}">
+          <div class="diary-item-date">${formatDateFull(d.date)}</div>
+          <div class="diary-item-preview">${d.note ? d.note.substring(0, 60) + (d.note.length > 60 ? '...' : '') : '（空白日记）'}</div>
+        </div>
+      `).join('');
 
+      list.querySelectorAll('.diary-item').forEach(item => {
+        item.addEventListener('click', function () {
+          openDiaryEditor(this.dataset.date, this.dataset.author);
+        });
+      });
+    } catch (e) { console.error('加载日记列表失败:', e); }
+  }
+
+  async function openDiaryEditor(date, author) {
+    $('#diary-list').classList.add('hidden');
+    $('#diary-new-btn').classList.add('hidden');
+    $('#diary-editor').classList.remove('hidden');
+    $('#diary-date-title').textContent = formatDateFull(date);
+
+    const textarea = $('#diary-textarea');
+    textarea.dataset.date = date;
+    textarea.dataset.author = author || getIdentity();
+    textarea.value = '';
+    pendingDiaryPhotos = [];
+    $('#diary-photo-preview').innerHTML = '';
+
+    try {
+      const diary = await db.getDiaryByDate(date, author || getIdentity());
+      if (diary) {
+        textarea.value = diary.note || '';
+        if (diary.images && diary.images.length > 0) {
+          renderSavedPhotos($('#diary-photo-preview'), diary.images);
+        }
+      }
+    } catch (e) { console.error('加载日记失败:', e); }
+
+    textarea.focus();
+
+    textarea.addEventListener('input', function () {
+      clearTimeout(diarySaveTimer);
+      diarySaveTimer = setTimeout(async () => {
+        try {
+          const imageUrls = await uploadPendingPhotos(pendingDiaryPhotos);
+          await db.upsertDiary(date, textarea.value, textarea.dataset.author, imageUrls);
+          $('#diary-photo-preview').innerHTML = '';
+          showToast('已自动保存');
+        } catch (e) { console.error('自动保存日记失败:', e); }
+      }, 2000);
+    });
+  }
+
+  function closeDiaryEditor() {
+    clearTimeout(diarySaveTimer);
+    $('#diary-editor').classList.add('hidden');
+    $('#diary-list').classList.remove('hidden');
+    $('#diary-new-btn').classList.remove('hidden');
+    loadDiaryList();
+  }
+
+  // 备忘录
+  async function loadMemoList() {
+    try {
+      const memos = await db.getMemos(getIdentity());
+      const list = $('#memo-list');
+      if (memos.length === 0) {
+        list.innerHTML = '<li class="memo-empty">还没有待办事项</li>';
+        return;
+      }
+      const active = memos.filter(m => !m.done);
+      const done = memos.filter(m => m.done);
+      const sorted = [...active, ...done];
+
+      list.innerHTML = sorted.map(m => `
+        <li class="memo-item ${m.done ? 'done' : ''}" data-id="${m.id}">
+          <button class="memo-check" aria-label="切换完成状态">${m.done ? '✅' : '○'}</button>
+          <span class="memo-text">${escapeHtml(m.note)}</span>
+          <button class="memo-delete" aria-label="删除">🗑️</button>
+        </li>
+      `).join('');
+
+      list.querySelectorAll('.memo-check').forEach(btn => {
+        btn.addEventListener('click', async function () {
+          const li = this.closest('.memo-item');
+          const isDone = li.classList.contains('done');
+          await db.updateMemo(li.dataset.id, { done: !isDone });
+          loadMemoList();
+        });
+      });
+
+      list.querySelectorAll('.memo-delete').forEach(btn => {
+        btn.addEventListener('click', async function () {
+          await db.deleteMemo(this.closest('.memo-item').dataset.id);
+          loadMemoList();
+          showToast('已删除');
+        });
+      });
+    } catch (e) { console.error('加载备忘录失败:', e); }
+  }
+
+  async function addMemo() {
+    const input = $('#memo-input');
+    const text = input.value.trim();
+    if (!text) return;
+    try {
+      await db.addMemo(text, getIdentity());
+      input.value = '';
+      loadMemoList();
+    } catch (e) {
+      console.error('添加备忘录失败:', e);
+      showToast('添加失败');
+    }
+  }
+
+  // 分段切换
+  function setupSegments() {
+    $$('.segment-btn').forEach(btn => {
+      btn.addEventListener('click', function () {
+        notebookSegment = this.dataset.segment;
+        $$('.segment-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        $$('.segment-panel').forEach(p => p.classList.add('hidden'));
+        if (notebookSegment === 'diary') {
+          $('#segment-diary').classList.remove('hidden');
+          loadDiaryList();
+        } else {
+          $('#segment-memo').classList.remove('hidden');
+          loadMemoList();
+        }
+      });
+    });
+  }
+
+  // ==================== 纸团 Tab ====================
   function initQuotesTab() {
     renderQuoteEmotionTabs();
     resetPaperBall();
@@ -180,8 +408,7 @@
     const container = $('#quote-emotion-tabs');
     container.innerHTML = EMOTIONS.map((e, i) => `
       <button class="quote-emo-btn ${quoteEmotionIndex === i ? 'active' : ''}"
-              data-index="${i}"
-              style="--emo-color: ${e.color}">
+              data-index="${i}" style="--emo-color: ${e.color}">
         ${e.emoji} ${e.name}
       </button>
     `).join('');
@@ -204,15 +431,7 @@
 
   async function drawQuote() {
     const emotion = EMOTIONS[quoteEmotionIndex];
-    let quote;
-    try {
-      quote = await db.getAvailableQuote(emotion.name);
-    } catch (e) {
-      console.error('获取话语失败:', e);
-      showToast('获取失败，请稍后再试');
-      return;
-    }
-
+    const quote = await db.getAvailableQuote(emotion.name, getIdentity());
     if (!quote) {
       $('#paper-ball').classList.add('hidden');
       $('#paper-result').classList.add('hidden');
@@ -229,178 +448,191 @@
       result.classList.remove('hidden');
       $('#paper-content').textContent = quote.content;
       result.classList.add('reveal');
-
-      try { await db.markQuoteUsed(quote.id); }
-      catch (e) { console.error('标记话语失败:', e); }
+      await db.markQuoteUsed(quote.id);
     }, 600);
   }
 
-  // ========== 小本 Tab ==========
-  let notebookSegment = 'diary';
-  let diarySaveTimer = null;
-
-  function initNotebookTab() {
-    $('#segment-diary').classList.remove('hidden');
-    $('#segment-memo').classList.add('hidden');
-    $$('.segment-btn').forEach(b => b.classList.remove('active'));
-    const diaryBtn = document.querySelector('.segment-btn[data-segment="diary"]');
-    if (diaryBtn) diaryBtn.classList.add('active');
-    notebookSegment = 'diary';
-    loadDiaryList();
-    loadMemoList();
+  // ==================== 时间轴 Tab ====================
+  async function initTimelineTab() {
+    selectedTimelineMood = null;
+    timelineOffset = 0;
+    renderEmotionSelector('#timeline-emotion-selector', selectedTimelineMood, (idx) => {
+      selectedTimelineMood = idx;
+    });
+    $('#timeline-note-input').value = '';
+    pendingTimelinePhotos = [];
+    $('#timeline-photo-preview').innerHTML = '';
+    await loadTimeline(true);
   }
 
-  // ==================== 日记 ====================
+  async function saveTimelineMood() {
+    if (selectedTimelineMood === null) { showToast('请先选择一个心情哦'); return; }
+    const note = $('#timeline-note-input').value.trim();
+    const emotion = EMOTIONS[selectedTimelineMood];
 
-  async function loadDiaryList() {
     try {
-      const diaries = await db.getDiaries();
-      const list = $('#diary-list');
-      if (diaries.length === 0) {
-        list.innerHTML = '<p class="empty-hint">还没有日记，点击下方开始记录</p>';
-        return;
-      }
-      list.innerHTML = diaries.map(d => `
-        <div class="diary-item" data-date="${d.date}">
-          <div class="diary-item-date">${formatDateFull(d.date)}</div>
-          <div class="diary-item-preview">${d.note ? d.note.substring(0, 60) + (d.note.length > 60 ? '...' : '') : '（空白日记）'}</div>
-        </div>
-      `).join('');
-
-      list.querySelectorAll('.diary-item').forEach(item => {
-        item.addEventListener('click', function () {
-          openDiaryEditor(this.dataset.date);
-        });
+      const imageUrls = await uploadPendingPhotos(pendingTimelinePhotos);
+      await db.saveRecord({
+        date: todayStr(),
+        mood: emotion.name,
+        note,
+        type: 'mood',
+        author: getIdentity(),
+        images: imageUrls
       });
+      playPaperPlane();
+      showToast('已记录');
+      // 重置表单并刷新
+      selectedTimelineMood = null;
+      $('#timeline-note-input').value = '';
+      $('#timeline-photo-preview').innerHTML = '';
+      renderEmotionSelector('#timeline-emotion-selector', null, (idx) => { selectedTimelineMood = idx; });
+      await loadTimeline(true);
     } catch (e) {
-      console.error('加载日记列表失败:', e);
+      console.error('保存失败:', e);
+      showToast('保存失败，请稍后再试');
     }
   }
 
-  async function openDiaryEditor(date) {
-    $('#diary-list').classList.add('hidden');
-    $('#diary-new-btn').classList.add('hidden');
-    $('#diary-editor').classList.remove('hidden');
-    $('#diary-date-title').textContent = formatDateFull(date);
-
-    const textarea = $('#diary-textarea');
-    textarea.dataset.date = date;
-    textarea.value = '';
-
-    try {
-      const diary = await db.getDiaryByDate(date);
-      if (diary) textarea.value = diary.note || '';
-    } catch (e) {
-      console.error('加载日记失败:', e);
+  async function loadTimeline(reset) {
+    if (reset) {
+      timelineOffset = 0;
+      $('#timeline-container').innerHTML = '';
     }
 
-    textarea.focus();
+    const records = await db.getTimeline(TIMELINE_PAGE, timelineOffset);
+    if (records.length === 0 && reset) {
+      $('#timeline-container').innerHTML = '<p class="empty-hint">还没有记录，记录此刻的心情吧</p>';
+      return;
+    }
 
-    textarea.addEventListener('input', function () {
-      clearTimeout(diarySaveTimer);
-      diarySaveTimer = setTimeout(async () => {
-        try {
-          await db.upsertDiary(date, textarea.value);
-          showToast('已自动保存 📝');
-        } catch (e) {
-          console.error('自动保存日记失败:', e);
+    const grouped = {};
+    records.forEach(r => {
+      const d = new Date(r.date);
+      const key = formatMonth(d.getFullYear(), d.getMonth() + 1);
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(r);
+    });
+
+    const container = $('#timeline-container');
+
+    Object.keys(grouped).sort().reverse().forEach(month => {
+      let monthHeader = container.querySelector(`[data-month="${month}"]`);
+      if (!monthHeader) {
+        monthHeader = document.createElement('div');
+        monthHeader.className = 'timeline-month';
+        monthHeader.dataset.month = month;
+        monthHeader.textContent = month;
+        container.appendChild(monthHeader);
+      }
+
+      grouped[month].forEach(r => {
+        const card = document.createElement('div');
+        card.className = 'timeline-card';
+
+        const moodEmoji = r.mood ? (EMOTIONS.find(e => e.name === r.mood)?.emoji || '') : '';
+        const timeStr = formatTime(r.created_at);
+        const authorName = r.author === 'xiaopang' ? '💝 小胖' : '🥰 肥纯';
+        const authorClass = r.author === 'xiaopang' ? 'xiaopang' : 'feichun';
+
+        let imagesHtml = '';
+        if (r.images && r.images.length > 0) {
+          imagesHtml = `<div class="timeline-images">${r.images.map(url =>
+            `<img src="${url}" alt="" loading="lazy" onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${url}'">`
+          ).join('')}</div>`;
         }
-      }, 2000);
+
+        card.innerHTML = `
+          <div class="timeline-card-header">
+            <span class="timeline-author ${authorClass}">${authorName}</span>
+            <span class="timeline-type-badge">${moodEmoji} ${r.mood || ''}</span>
+            <span class="timeline-time">${timeStr}</span>
+          </div>
+          <div class="timeline-card-body">
+            ${r.note ? `<p class="timeline-note">${escapeHtml(r.note)}</p>` : ''}
+            ${imagesHtml}
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    });
+
+    timelineOffset += records.length;
+    if (records.length === TIMELINE_PAGE) {
+      $('#timeline-load-more').classList.remove('hidden');
+    } else {
+      $('#timeline-load-more').classList.add('hidden');
+    }
+  }
+
+  // ==================== 悄悄话 Tab ====================
+  let whisperSub = null;
+
+  async function initWhispersTab() {
+    await loadWhispers();
+    setupWhisperRealtime();
+  }
+
+  async function loadWhispers() {
+    const list = $('#whisper-list');
+    const whispers = await db.getWhispers(50);
+
+    if (whispers.length === 0) {
+      list.innerHTML = '<p class="empty-hint">还没有悄悄话，发一条吧</p>';
+      return;
+    }
+
+    let html = '';
+    let lastDate = '';
+    whispers.forEach(w => {
+      const dateStr = w.created_at ? w.created_at.split('T')[0] : '';
+      if (dateStr !== lastDate) {
+        lastDate = dateStr;
+        html += `<div class="whisper-date-divider">${formatDate(dateStr)}</div>`;
+      }
+      const emotionEmoji = EMOTIONS.find(e => e.name === w.emotion)?.emoji || '💬';
+      html += `
+        <div class="whisper-bubble ${w.sender}">
+          <div class="whisper-bubble-emotion">${emotionEmoji}</div>
+          <div>${escapeHtml(w.content)}</div>
+          <div class="whisper-bubble-time">${formatTime(w.created_at)}</div>
+        </div>
+      `;
+    });
+    list.innerHTML = html;
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function setupWhisperRealtime() {
+    if (whisperSub) whisperSub.unsubscribe();
+    whisperSub = db.subscribeToWhispers(payload => {
+      if (currentTab === 'whispers') loadWhispers();
     });
   }
 
-  function closeDiaryEditor() {
-    clearTimeout(diarySaveTimer);
-    $('#diary-editor').classList.add('hidden');
-    $('#diary-list').classList.remove('hidden');
-    $('#diary-new-btn').classList.remove('hidden');
-    loadDiaryList();
-  }
+  async function sendWhisper() {
+    const emotion = $('#whisper-emotion').value;
+    const content = $('#whisper-input').value.trim();
+    if (!content) return;
 
-  // ==================== 备忘录 ====================
-
-  async function loadMemoList() {
     try {
-      const memos = await db.getMemos();
-      const list = $('#memo-list');
-      if (memos.length === 0) {
-        list.innerHTML = '<li class="memo-empty">还没有待办事项</li>';
-        return;
-      }
-
-      const active = memos.filter(m => !m.done);
-      const done = memos.filter(m => m.done);
-      const sorted = [...active, ...done];
-
-      list.innerHTML = sorted.map(m => `
-        <li class="memo-item ${m.done ? 'done' : ''}" data-id="${m.id}">
-          <button class="memo-check ${m.done ? 'checked' : ''}" aria-label="切换完成状态">
-            ${m.done ? '✅' : '○'}
-          </button>
-          <span class="memo-text">${escapeHtml(m.note)}</span>
-          <button class="memo-delete" aria-label="删除">🗑️</button>
-        </li>
-      `).join('');
-
-      list.querySelectorAll('.memo-check').forEach(btn => {
-        btn.addEventListener('click', async function () {
-          const li = this.closest('.memo-item');
-          const id = li.dataset.id;
-          const isDone = li.classList.contains('done');
-          try {
-            await db.updateMemo(id, { done: !isDone });
-            loadMemoList();
-          } catch (e) {
-            console.error('更新备忘录失败:', e);
-          }
-        });
-      });
-
-      list.querySelectorAll('.memo-delete').forEach(btn => {
-        btn.addEventListener('click', async function () {
-          const id = this.closest('.memo-item').dataset.id;
-          try {
-            await db.deleteMemo(id);
-            loadMemoList();
-            showToast('已删除');
-          } catch (e) {
-            console.error('删除备忘录失败:', e);
-          }
-        });
-      });
+      await db.sendWhisper(getIdentity(), emotion, content);
+      $('#whisper-input').value = '';
+      await loadWhispers();
     } catch (e) {
-      console.error('加载备忘录失败:', e);
+      console.error('发送悄悄话失败:', e);
+      showToast('发送失败');
     }
   }
 
-  async function addMemo() {
-    const input = $('#memo-input');
-    const text = input.value.trim();
-    if (!text) return;
-    try {
-      await db.addMemo(text);
-      input.value = '';
-      loadMemoList();
-    } catch (e) {
-      console.error('添加备忘录失败:', e);
-      showToast('添加失败，请稍后再试');
-    }
+  function renderWhisperEmotionSelect() {
+    const select = $('#whisper-emotion');
+    select.innerHTML = EMOTIONS.map(e => `<option value="${e.name}">${e.emoji}</option>`).join('');
   }
 
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  // ========== 伴侣 Tab ==========
-  let timelineOffset = 0;
-  const TIMELINE_PAGE = 20;
-  let realtimeSubscription = null;
-
+  // ==================== 我们 Tab ====================
   function initPartnerTab() {
     if (sessionStorage.getItem('partner_unlocked') === 'true') {
-      partnerUnlocked = true;
       showPartnerContent();
     } else {
       showPartnerGate();
@@ -415,207 +647,70 @@
   function showPartnerContent() {
     $('#partner-gate').classList.add('hidden');
     $('#partner-content').classList.remove('hidden');
-    loadTimeline(true);
     loadQuoteInventory();
   }
 
   function unlockPartner() {
     const input = $('#partner-password').value.trim();
     if (input === PARTNER_PASSWORD) {
-      partnerUnlocked = true;
       sessionStorage.setItem('partner_unlocked', 'true');
+      setIdentity('xiaopang');
       $('#partner-error').classList.add('hidden');
       $('#partner-password').value = '';
       showPartnerContent();
+      showToast('已切换为小胖身份');
     } else {
       $('#partner-error').classList.remove('hidden');
       $('#partner-password').value = '';
     }
   }
 
-  // ==================== 时间线 ====================
-
-  async function loadTimeline(reset = true) {
-    if (reset) timelineOffset = 0;
-    try {
-      const records = await db.getTimeline(TIMELINE_PAGE, timelineOffset);
-      const container = $('#timeline-container');
-
-      if (reset) container.innerHTML = '';
-
-      if (records.length === 0 && reset) {
-        container.innerHTML = '<p class="empty-hint">还没有记录，等待她的第一条心情~</p>';
-        return;
-      }
-
-      const grouped = {};
-      records.forEach(r => {
-        if (!grouped[r.date]) grouped[r.date] = [];
-        grouped[r.date].push(r);
-      });
-
-      Object.keys(grouped).sort().reverse().forEach(date => {
-        const dateHeader = document.createElement('div');
-        dateHeader.className = 'timeline-date';
-        dateHeader.textContent = formatDateFull(date);
-        container.appendChild(dateHeader);
-
-        grouped[date].forEach(r => {
-          const card = document.createElement('div');
-          card.className = 'timeline-card';
-          const typeLabel = r.type === 'mood' ? '心情' : r.type === 'diary' ? '日记' : '备忘';
-          const emoji = r.type === 'mood' ? (EMOTIONS.find(e => e.name === r.mood)?.emoji || '') : '';
-          const timeStr = r.created_at ? new Date(r.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
-
-          card.innerHTML = `
-            <div class="timeline-card-header">
-              <span class="timeline-type-badge">${emoji} ${typeLabel}</span>
-              <span class="timeline-time">${timeStr}</span>
-            </div>
-            <div class="timeline-card-body">
-              ${r.mood ? `<p class="timeline-mood">${EMOTIONS.find(e => e.name === r.mood)?.emoji || ''} ${r.mood}</p>` : ''}
-              ${r.note ? `<p class="timeline-note">${escapeHtml(r.note)}</p>` : ''}
-            </div>
-          `;
-          container.appendChild(card);
-        });
-      });
-
-      timelineOffset += records.length;
-      if (records.length === TIMELINE_PAGE) {
-        $('#timeline-load-more').classList.remove('hidden');
-      } else {
-        $('#timeline-load-more').classList.add('hidden');
-      }
-    } catch (e) {
-      console.error('加载时间线失败:', e);
-    }
-  }
-
-  // ==================== 纸团库存 ====================
-
   async function loadQuoteInventory() {
-    try {
-      const inventory = await db.getQuoteInventory();
-      const container = $('#quote-inventory');
-      container.innerHTML = EMOTIONS.map(e => {
-        const stats = inventory[e.name] || { total: 0, remaining: 0 };
-        const pct = stats.total > 0 ? Math.round(stats.remaining / stats.total * 100) : 0;
-        return `
-          <div class="inventory-row">
-            <span class="inventory-emoji">${e.emoji}</span>
-            <span class="inventory-name">${e.name}</span>
-            <div class="inventory-bar">
-              <div class="inventory-fill" style="width:${pct}%; background:${e.color}"></div>
-            </div>
-            <span class="inventory-count">${stats.remaining}/${stats.total}</span>
-          </div>
-        `;
-      }).join('');
-    } catch (e) {
-      console.error('加载纸团库存失败:', e);
+    const inventory = await db.getQuoteInventory();
+    const container = $('#quote-inventory');
+
+    if (Object.keys(inventory).length === 0) {
+      container.innerHTML = '<p style="color:var(--color-text-light);font-size:0.88rem">还没有纸团库存</p>';
+      return;
     }
+
+    const rows = Object.values(inventory);
+    container.innerHTML = rows.map(r => {
+      const emotion = EMOTIONS.find(e => e.name === r.mood);
+      const emoji = emotion?.emoji || '📝';
+      const color = emotion?.color || '#ccc';
+      const pct = r.total > 0 ? Math.round(r.remaining / r.total * 100) : 0;
+      const authorLabel = r.author === 'xiaopang' ? '小胖' : '肥纯';
+      return `
+        <div class="inventory-row">
+          <span class="inventory-emoji">${emoji}</span>
+          <span class="inventory-name">${r.mood}</span>
+          <span class="inventory-author">${authorLabel}</span>
+          <div class="inventory-bar"><div class="inventory-fill" style="width:${pct}%;background:${color}"></div></div>
+          <span class="inventory-count">${r.remaining}/${r.total}</span>
+        </div>
+      `;
+    }).join('');
   }
 
-  function renderQuoteMoodSelect() {
+  function renderPartnerMoodSelect() {
     const select = $('#new-quote-mood');
-    select.innerHTML = EMOTIONS.map(e => `
-      <option value="${e.name}">${e.emoji} ${e.name}</option>
-    `).join('');
+    select.innerHTML = EMOTIONS.map(e => `<option value="${e.name}">${e.emoji} ${e.name}</option>`).join('');
   }
 
   async function handleAddQuote() {
     const mood = $('#new-quote-mood').value;
     const content = $('#new-quote-content').value.trim();
-    if (!content) {
-      showToast('请输入话语内容~');
-      return;
-    }
+    if (!content) { showToast('请输入话语内容'); return; }
     try {
-      await db.addQuote(mood, content);
+      await db.addQuote(mood, content, getIdentity());
       $('#new-quote-content').value = '';
-      showToast('纸团已放入 🎁');
+      showToast('纸团已放入');
       loadQuoteInventory();
     } catch (e) {
       console.error('添加话语失败:', e);
-      showToast('添加失败，请稍后再试');
+      showToast('添加失败');
     }
-  }
-
-  // ========== 初始化 ==========
-  function init() {
-    db.init();
-    setupTabs();
-    setupNetworkDetection();
-
-    // 分段控制器
-    $$('.segment-btn').forEach(btn => {
-      btn.addEventListener('click', function () {
-        notebookSegment = this.dataset.segment;
-        $$('.segment-btn').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
-        $$('.segment-panel').forEach(p => p.classList.add('hidden'));
-        if (notebookSegment === 'diary') {
-          $('#segment-diary').classList.remove('hidden');
-          loadDiaryList();
-        } else {
-          $('#segment-memo').classList.remove('hidden');
-          loadMemoList();
-        }
-      });
-    });
-
-    // 心情保存
-    $('#mood-save-btn').addEventListener('click', saveMood);
-
-    // 纸团
-    $('#paper-ball').addEventListener('click', drawQuote);
-    $('#quote-retry-btn').addEventListener('click', resetPaperBall);
-
-    // 日记
-    $('#diary-new-btn').addEventListener('click', () => openDiaryEditor(todayStr()));
-    $('#diary-back-btn').addEventListener('click', closeDiaryEditor);
-
-    // 备忘录
-    $('#memo-add-btn').addEventListener('click', addMemo);
-    $('#memo-input').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') addMemo();
-    });
-
-    // 伴侣
-    $('#partner-unlock-btn').addEventListener('click', unlockPartner);
-    $('#partner-password').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') unlockPartner();
-    });
-    $('#timeline-load-more').addEventListener('click', () => loadTimeline(false));
-    renderQuoteMoodSelect();
-    $('#add-quote-btn').addEventListener('click', handleAddQuote);
-
-    // 启动
-    initMoodTab();
-    console.log('肥纯专属情绪盒子 ❤️ 已就绪');
-  }
-
-  // ========== Tab 切换 ==========
-  function setupTabs() {
-    $$('.nav-btn').forEach(btn => {
-      btn.addEventListener('click', function () {
-        switchTab(this.dataset.tab);
-      });
-    });
-  }
-
-  function switchTab(tab) {
-    currentTab = tab;
-    $$('.tab-content').forEach(s => s.classList.add('hidden'));
-    $(`#tab-${tab}`).classList.remove('hidden');
-    $$('.nav-btn').forEach(b => b.classList.remove('active'));
-    $(`.nav-btn[data-tab="${tab}"]`).classList.add('active');
-
-    if (tab === 'mood') initMoodTab();
-    else if (tab === 'quotes') initQuotesTab();
-    else if (tab === 'notebook') initNotebookTab();
-    else if (tab === 'partner') initPartnerTab();
   }
 
   // ========== 网络检测 ==========
@@ -628,6 +723,78 @@
     window.addEventListener('online', updateStatus);
     window.addEventListener('offline', updateStatus);
     updateStatus();
+  }
+
+  // ========== 灯箱 ==========
+  function setupLightbox() {
+    $('#lightbox').addEventListener('click', function () {
+      this.classList.add('hidden');
+    });
+    $('.lightbox-close')?.addEventListener('click', function (e) {
+      e.stopPropagation();
+      $('#lightbox').classList.add('hidden');
+    });
+  }
+
+  // ========== 初始化 ==========
+  function init() {
+    db.init();
+    updateIdentityUI();
+    setupTabs();
+    setupSegments();
+    setupNetworkDetection();
+    setupLightbox();
+    setupPhotoInput('#diary-photo-btn', '#diary-photo-input', '#diary-photo-preview', pendingDiaryPhotos);
+    setupPhotoInput('#timeline-photo-btn', '#timeline-photo-input', '#timeline-photo-preview', pendingTimelinePhotos);
+
+    // 记录 Tab
+    $('#diary-new-btn').addEventListener('click', () => openDiaryEditor(todayStr(), getIdentity()));
+    $('#diary-back-btn').addEventListener('click', closeDiaryEditor);
+    $('#memo-add-btn').addEventListener('click', addMemo);
+    $('#memo-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') addMemo(); });
+
+    // 纸团 Tab
+    $('#paper-ball').addEventListener('click', drawQuote);
+    $('#quote-retry-btn').addEventListener('click', resetPaperBall);
+
+    // 时间轴 Tab
+    $('#timeline-save-btn').addEventListener('click', saveTimelineMood);
+    $('#timeline-load-more').addEventListener('click', () => loadTimeline(false));
+
+    // 悄悄话 Tab
+    renderWhisperEmotionSelect();
+    $('#whisper-send-btn').addEventListener('click', sendWhisper);
+    $('#whisper-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') sendWhisper(); });
+
+    // 我们 Tab
+    $('#partner-unlock-btn').addEventListener('click', unlockPartner);
+    $('#partner-password').addEventListener('keydown', function (e) { if (e.key === 'Enter') unlockPartner(); });
+    renderPartnerMoodSelect();
+    $('#add-quote-btn').addEventListener('click', handleAddQuote);
+
+    // 身份切换
+    $('#identity-switch-btn').addEventListener('click', function () {
+      if (getIdentity() === 'xiaopang') {
+        setIdentity('feichun');
+        sessionStorage.removeItem('partner_unlocked');
+        showToast('已切回肥纯 🥰');
+        if (currentTab === 'partner') initPartnerTab();
+      } else {
+        showSwitchPasswordOverlay();
+      }
+    });
+    $('#switch-cancel-btn').addEventListener('click', hideSwitchPasswordOverlay);
+    $('#switch-confirm-btn').addEventListener('click', confirmSwitch);
+    $('#switch-password-input').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') confirmSwitch();
+    });
+    $('#switch-password-overlay').addEventListener('click', function (e) {
+      if (e.target === this) hideSwitchPasswordOverlay();
+    });
+
+    // 启动
+    initRecordTab();
+    console.log('情绪盒子 5 Tab 双人互动版 已就绪');
   }
 
   document.addEventListener('DOMContentLoaded', init);
