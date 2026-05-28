@@ -6,67 +6,67 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#FFF5EE">
-  <title>肥纯专属情绪盒子❤️</title>
+  <title>肥纯专属情绪盒子</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <!-- 网络状态 -->
   <div id="network-status" class="network-status hidden">
-    <span>网络不太好，连接后自动同步 📡</span>
+    <span>网络不太好，连接后自动同步</span>
   </div>
 
   <div id="app" class="app-container">
     <!-- 头部 -->
     <header class="app-header">
-      <h1>肥纯专属情绪盒子❤️</h1>
+      <h1>肥纯专属情绪盒子</h1>
+      <div class="header-identity">
+        <span id="identity-badge" class="identity-badge">当前是肥纯 🥰</span>
+        <button id="identity-switch-btn" class="btn-switch">🔄 切换</button>
+      </div>
     </header>
 
-    <!-- ====== 心情 Tab ====== -->
-    <section id="tab-mood" class="tab-content">
-      <!-- 情绪日历热力图 -->
-      <div class="card heatmap-card">
-        <div class="heatmap-header">
-          <span>心情日记</span>
-          <span class="heatmap-legend">
-            <span class="legend-dot" style="background:#E0E0E0"></span> 无
-            <span class="legend-dot" style="background:#FF6B8A"></span> 幸福
-            <span class="legend-dot" style="background:#FFA726"></span> 开心
-            <span class="legend-dot" style="background:#B39DDB"></span> 疲惫
-            <span class="legend-dot" style="background:#64B5F6"></span> 伤心
-            <span class="legend-dot" style="background:#EF5350"></span> 生气
-            <span class="legend-dot" style="background:#AB47BC"></span> 焦虑
-          </span>
+    <!-- ====== 记录 Tab ====== -->
+    <section id="tab-record" class="tab-content">
+      <div class="segment-control">
+        <button class="segment-btn active" data-segment="diary">日记</button>
+        <button class="segment-btn" data-segment="memo">备忘录</button>
+      </div>
+
+      <!-- 日记面板 -->
+      <div id="segment-diary" class="segment-panel">
+        <div id="diary-list" class="diary-list">
+          <p class="empty-hint">还没有日记，点击下方开始记录</p>
         </div>
-        <div class="heatmap-grid" id="heatmap-grid"></div>
+        <div id="diary-editor" class="diary-editor hidden">
+          <button class="btn-back" id="diary-back-btn">← 返回列表</button>
+          <h2 id="diary-date-title" class="diary-title"></h2>
+          <textarea id="diary-textarea" placeholder="记录今天的点滴..." rows="12"></textarea>
+          <div class="photo-preview" id="diary-photo-preview"></div>
+          <button class="btn-photo" id="diary-photo-btn">
+            <span>📷 添加照片</span>
+          </button>
+          <input type="file" id="diary-photo-input" class="photo-input-hidden" accept="image/*" multiple>
+        </div>
+        <button id="diary-new-btn" class="btn-primary btn-save">写今天的日记</button>
       </div>
 
-      <!-- 情绪选择 -->
-      <div class="card emotion-card">
-        <p class="card-label">今天心情怎么样？</p>
-        <div class="emotion-selector" id="emotion-selector"></div>
+      <!-- 备忘录面板 -->
+      <div id="segment-memo" class="segment-panel hidden">
+        <ul id="memo-list" class="memo-list"></ul>
+        <div class="memo-add-bar">
+          <input type="text" id="memo-input" placeholder="添加新待办..." autocomplete="off">
+          <button id="memo-add-btn" class="btn-add">＋</button>
+        </div>
       </div>
-
-      <!-- 文字记录 -->
-      <div class="card note-card">
-        <textarea id="mood-note-input" placeholder="今天发生了什么..." rows="3"></textarea>
-      </div>
-
-      <!-- 保存 -->
-      <button id="mood-save-btn" class="btn-primary btn-save">
-        <span>💾 保存心情</span>
-      </button>
     </section>
 
     <!-- ====== 纸团 Tab ====== -->
     <section id="tab-quotes" class="tab-content hidden">
-      <!-- 情绪切换 -->
       <div class="quote-emotion-tabs" id="quote-emotion-tabs"></div>
-
-      <!-- 纸团区域 -->
       <div class="paper-ball-area" id="paper-ball-area">
         <div class="paper-ball" id="paper-ball">
           <div class="paper-ball-inner" id="paper-ball-inner">
-            <span class="paper-ball-hint">点我拆开 📦</span>
+            <span class="paper-ball-hint">点我拆开</span>
           </div>
         </div>
         <div class="paper-result hidden" id="paper-result">
@@ -80,94 +80,95 @@
       </div>
     </section>
 
-    <!-- ====== 小本 Tab ====== -->
-    <section id="tab-notebook" class="tab-content hidden">
-      <!-- 分段控制器 -->
-      <div class="segment-control">
-        <button class="segment-btn active" data-segment="diary">📝 日记</button>
-        <button class="segment-btn" data-segment="memo">✅ 备忘录</button>
+    <!-- ====== 时间轴 Tab ====== -->
+    <section id="tab-timeline" class="tab-content hidden">
+      <!-- 记录此刻 -->
+      <div class="card timeline-record-card">
+        <p class="card-label">记录此刻</p>
+        <div class="emotion-selector" id="timeline-emotion-selector"></div>
+        <textarea id="timeline-note-input" class="timeline-note-input" placeholder="说点什么..." rows="2"></textarea>
+        <div class="photo-preview" id="timeline-photo-preview"></div>
+        <div class="timeline-record-actions">
+          <button class="btn-photo" id="timeline-photo-btn">
+            <span>📷</span>
+          </button>
+          <input type="file" id="timeline-photo-input" class="photo-input-hidden" accept="image/*" multiple>
+          <button id="timeline-save-btn" class="btn-send">记录</button>
+        </div>
       </div>
+      <div id="timeline-container" class="timeline"></div>
+      <button id="timeline-load-more" class="btn-load-more hidden">加载更多</button>
+    </section>
 
-      <!-- 日记视图 -->
-      <div id="segment-diary" class="segment-panel">
-        <div id="diary-list" class="diary-list">
-          <p class="empty-hint">还没有日记，点击下方开始记录</p>
-        </div>
-        <div id="diary-editor" class="diary-editor hidden">
-          <button class="btn-back" id="diary-back-btn">← 返回列表</button>
-          <h2 id="diary-date-title" class="diary-title"></h2>
-          <textarea id="diary-textarea" placeholder="记录今天的点滴..." rows="12"></textarea>
-        </div>
-        <button id="diary-new-btn" class="btn-primary btn-save">写今天的日记</button>
+    <!-- ====== 悄悄话 Tab ====== -->
+    <section id="tab-whispers" class="tab-content hidden">
+      <div id="whisper-list" class="whisper-list">
+        <p class="empty-hint">还没有悄悄话，发一条吧</p>
       </div>
-
-      <!-- 备忘录视图 -->
-      <div id="segment-memo" class="segment-panel hidden">
-        <ul id="memo-list" class="memo-list"></ul>
-        <div class="memo-add-bar">
-          <input type="text" id="memo-input" placeholder="添加新待办..." autocomplete="off">
-          <button id="memo-add-btn" class="btn-add">＋</button>
-        </div>
+      <div class="whisper-send-bar">
+        <select id="whisper-emotion" class="whisper-emotion-select"></select>
+        <input type="text" id="whisper-input" class="whisper-input" placeholder="说句悄悄话..." autocomplete="off">
+        <button id="whisper-send-btn" class="btn-send">发送</button>
       </div>
     </section>
 
     <!-- ====== 我们 Tab ====== -->
     <section id="tab-partner" class="tab-content hidden">
-      <!-- 密码门 -->
       <div id="partner-gate" class="partner-gate">
         <div class="gate-icon">🔐</div>
         <p class="gate-title">肥纯的秘密花园</p>
         <input type="password" id="partner-password" class="gate-input" placeholder="输入密码" inputmode="numeric" maxlength="10">
         <button id="partner-unlock-btn" class="btn-primary">解锁进入</button>
-        <p id="partner-error" class="error-text hidden">密码不对哦~</p>
+        <p id="partner-error" class="error-text hidden">密码不对哦</p>
       </div>
-
-      <!-- 伴侣内容 -->
       <div id="partner-content" class="partner-content hidden">
-        <!-- 新记录提示 -->
-        <div id="new-record-notif" class="new-record-notif hidden">
-          <span>收到💌 她有新的心情记录</span>
-        </div>
-
-        <!-- 时间线 -->
         <div class="partner-section">
-          <h3 class="section-title">📅 她的时间线</h3>
-          <div id="timeline-container" class="timeline"></div>
-          <button id="timeline-load-more" class="btn-load-more hidden">加载更多</button>
-        </div>
-
-        <!-- 纸团库存 -->
-        <div class="partner-section">
-          <h3 class="section-title">📦 纸团库存</h3>
+          <h3 class="section-title">纸团库存</h3>
           <div id="quote-inventory" class="quote-inventory"></div>
         </div>
-
-        <!-- 补充话语 -->
         <div class="partner-section">
-          <h3 class="section-title">✏️ 补充话语</h3>
+          <h3 class="section-title">补充话语</h3>
           <div class="add-quote-form">
             <select id="new-quote-mood" class="quote-mood-select"></select>
             <textarea id="new-quote-content" class="quote-textarea" placeholder="写下想对她说的话..." rows="3"></textarea>
-            <button id="add-quote-btn" class="btn-primary">📨 放入纸团</button>
+            <button id="add-quote-btn" class="btn-primary">放入纸团</button>
           </div>
         </div>
       </div>
     </section>
   </div>
 
+  <!-- 身份切换密码弹窗 -->
+  <div id="switch-password-overlay" class="switch-overlay hidden">
+    <div class="switch-dialog">
+      <p class="switch-dialog-title">切换为小胖</p>
+      <input type="password" id="switch-password-input" class="switch-password-input"
+             placeholder="输入密码" inputmode="numeric" maxlength="10">
+      <div class="switch-dialog-btns">
+        <button id="switch-cancel-btn" class="btn-switch-cancel">取消</button>
+        <button id="switch-confirm-btn" class="btn-switch-confirm">确认</button>
+      </div>
+      <p id="switch-password-error" class="error-text hidden">密码不对哦</p>
+    </div>
+  </div>
+
   <!-- ====== 底部导航 ====== -->
   <nav class="bottom-nav">
-    <button class="nav-btn active" data-tab="mood">
-      <span class="nav-emoji">😊</span>
-      <span class="nav-label">心情</span>
+    <button class="nav-btn active" data-tab="record">
+      <span class="nav-emoji">📝</span>
+      <span class="nav-label">记录</span>
     </button>
     <button class="nav-btn" data-tab="quotes">
       <span class="nav-emoji">🎁</span>
       <span class="nav-label">纸团</span>
     </button>
-    <button class="nav-btn" data-tab="notebook">
-      <span class="nav-emoji">📔</span>
-      <span class="nav-label">小本</span>
+    <button class="nav-btn" data-tab="timeline">
+      <span class="nav-emoji">📅</span>
+      <span class="nav-label">时间轴</span>
+    </button>
+    <button class="nav-btn" data-tab="whispers">
+      <span class="nav-emoji">💌</span>
+      <span class="nav-label">悄悄话</span>
     </button>
     <button class="nav-btn" data-tab="partner">
       <span class="nav-emoji">💞</span>
@@ -181,10 +182,16 @@
     <span class="plane-text hidden">已送达</span>
   </div>
 
-  <!-- ====== Toast 容器 ====== -->
+  <!-- ====== 照片灯箱 ====== -->
+  <div id="lightbox" class="lightbox hidden">
+    <span class="lightbox-close">✕</span>
+    <img id="lightbox-img" src="" alt="照片">
+  </div>
+
+  <!-- ====== Toast ====== -->
   <div id="toast-container" class="toast-container"></div>
 
-  <!-- 应用脚本 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script src="js/config.js"></script>
   <script src="js/supabase.js"></script>
   <script src="js/app.js"></script>
