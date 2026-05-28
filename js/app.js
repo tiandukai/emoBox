@@ -147,7 +147,9 @@
 
     input.addEventListener('change', () => {
       const files = Array.from(input.files);
-      files.forEach(f => {
+      console.log('[照片] 选择了', files.length, '个文件');
+      files.forEach((f, i) => {
+        console.log('[照片] 文件' + i + ':', f.name, f.type, (f.size / 1024).toFixed(1) + 'KB');
         pendingArray.push(f);
         renderPhotoPreview(preview, pendingArray);
       });
@@ -175,18 +177,26 @@
   }
 
   async function uploadPendingPhotos(pendingArray) {
-    if (pendingArray.length === 0) return [];
+    if (pendingArray.length === 0) {
+      console.log('[照片] uploadPendingPhotos: 数组为空，跳过上传');
+      return [];
+    }
+    console.log('[照片] 开始上传', pendingArray.length, '个文件');
     const results = [];
-    for (const file of pendingArray) {
+    for (let i = 0; i < pendingArray.length; i++) {
+      const file = pendingArray[i];
       try {
+        console.log('[照片] 上传中', i, file.name, file.type, file.size);
         const result = await db.uploadImage(file);
+        console.log('[照片] 上传成功', i, 'URL:', result.url);
         results.push(result.url);
       } catch (e) {
-        console.error('照片上传失败:', e);
-        showToast('照片上传失败，请重试');
+        console.error('[照片] 上传失败', i, file.name, e);
+        showToast('照片上传失败: ' + (e.message || '未知错误'));
       }
     }
     pendingArray.length = 0;
+    console.log('[照片] 上传完成，共', results.length, '个URL');
     return results;
   }
 
@@ -478,7 +488,8 @@
 
     try {
       const imageUrls = await uploadPendingPhotos(pendingTimelinePhotos);
-      await db.saveRecord({
+      console.log('[时间轴] upload返回URLs:', JSON.stringify(imageUrls));
+      const saved = await db.saveRecord({
         date: todayStr(),
         mood: emotion.name,
         note,
@@ -486,6 +497,7 @@
         author: getIdentity(),
         images: imageUrls
       });
+      console.log('[时间轴] 保存结果 images:', JSON.stringify(saved?.images));
       playPaperPlane();
       showToast('已记录');
       // 重置表单并刷新
@@ -542,9 +554,10 @@
         const authorClass = r.author === 'xiaopang' ? 'xiaopang' : 'feichun';
 
         let imagesHtml = '';
+        console.log('[时间轴] 渲染记录 images 字段:', r.images, 'type:', typeof r.images, 'isArray:', Array.isArray(r.images));
         if (r.images && r.images.length > 0) {
           imagesHtml = `<div class="timeline-images">${r.images.map(url =>
-            `<img src="${url}" alt="" loading="lazy" onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${url}'">`
+            `<img src="${url}" alt="" loading="lazy" onerror="console.log('[时间轴] 图片加载失败:', this.src)" onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${url}'">`
           ).join('')}</div>`;
         }
 
