@@ -1,4 +1,4 @@
-// app.js - 肥纯专属情绪盒子 5 Tab 双人互动
+// app.js - 给对方的情绪盒子 5 Tab 双人互动
 (function () {
   'use strict';
 
@@ -13,7 +13,7 @@
   ];
 
   // ========== 状态 ==========
-  let currentTab = 'record';
+  let currentTab = 'home';
   let selectedTimelineMood = null;
   let notebookSegment = 'diary';
   let quoteEmotionIndex = 0;
@@ -23,59 +23,250 @@
   let pendingDiaryPhotos = [];
   let pendingTimelinePhotos = [];
 
-  // ========== 身份 ==========
+  // ========== 身份（Auth）==========
+  let authUser = null;
+  let myProfile = null;
+  let mySpace = null;
+  let partnerProfile = null;
+
   function getIdentity() {
-    return sessionStorage.getItem('emoBox_identity') || 'feichun';
+    return myProfile?.nickname || 'feichun';
   }
 
-  function setIdentity(id) {
-    sessionStorage.setItem('emoBox_identity', id);
-    updateIdentityUI();
+  function getUserId() {
+    return authUser?.id || null;
   }
 
-  function updateIdentityUI() {
-    const badge = $('#identity-badge');
-    const partnerNav = $('.nav-btn[data-tab="partner"]');
-    const id = getIdentity();
-    if (id === 'xiaopang') {
-      badge.textContent = '当前是小胖 💝';
-      badge.classList.add('xiaopang');
-      partnerNav.classList.remove('hidden');
-    } else {
-      badge.textContent = '当前是肥纯 🥰';
-      badge.classList.remove('xiaopang');
-      partnerNav.classList.add('hidden');
-      // 肥纯端如果在"我们"Tab，切回记录
-      if (currentTab === 'partner') switchTab('record');
+  function isLoggedIn() {
+    return !!authUser;
+  }
+
+  async function initAuth() {
+    try {
+      authUser = await db.getUser();
+    } catch (e) {
+      authUser = null;
+    }
+    if (authUser) {
+      db.setUserId(authUser.id);
+      await reloadProfile();
+    }
+    updateAuthUI();
+    db.onAuthChange(async (event, user) => {
+      authUser = user;
+      if (user) {
+        db.setUserId(user.id);
+        await reloadProfile();
+        if (currentTab === 'partner' && !partnerProfile) switchTab('record');
+      } else {
+        myProfile = null;
+        mySpace = null;
+        partnerProfile = null;
+        db.setUserId(null);
+        updateAuthUI();
+        showAuthPage('login');
+        return;
+      }
+      updateAuthUI();
+    });
+  }
+
+  let _reloadingProfile = false;
+
+  async function reloadProfile() {
+    if (!authUser) return;
+    if (_reloadingProfile) return;
+    _reloadingProfile = true;
+    try {
+      myProfile = await db.getProfile(authUser.id);
+      console.log('[Profile] getProfile:', myProfile);
+      if (!myProfile) {
+        // 新用户自动创建 profile（默认昵称=邮箱前缀，后续可在设置修改）
+        const nickname = (authUser.email || 'user').split('@')[0];
+        myProfile = await db.createProfile(authUser.id, nickname);
+        console.log('[Profile] createProfile:', myProfile);
+      }
+      // 确保有邀请码
+      if (!myProfile?.invite_code) {
+        const code = await db.getMyInviteCode(authUser.id);
+        console.log('[Profile] 生成邀请码:', code);
+        myProfile = await db.getProfile(authUser.id);
+      }
+      console.log('[Profile] 最终 profile:', myProfile);
+      // 加载空间信息
+      mySpace = null;
+      partnerProfile = null;
+      if (myProfile?.space_id) {
+        mySpace = await db.getSpace(myProfile.space_id);
+        partnerProfile = await db.getPartnerProfile(myProfile.space_id, authUser.id);
+      }
+      console.log('[Profile] space:', mySpace, 'partner:', partnerProfile);
+    } catch (e) {
+      console.error('[Profile] reloadProfile 出错:', e);
+    } finally {
+      _reloadingProfile = false;
     }
   }
 
-  function otherIdentity() {
-    return getIdentity() === 'feichun' ? 'xiaopang' : 'feichun';
+  function isPaired() {
+    return !!(mySpace?.partner_id && partnerProfile);
   }
 
-  function showSwitchPasswordOverlay() {
-    $('#switch-password-overlay').classList.remove('hidden');
-    $('#switch-password-input').value = '';
-    $('#switch-password-error').classList.add('hidden');
-    setTimeout(() => $('#switch-password-input').focus(), 100);
-  }
-
-  function hideSwitchPasswordOverlay() {
-    $('#switch-password-overlay').classList.add('hidden');
-  }
-
-  function confirmSwitch() {
-    const input = $('#switch-password-input').value.trim();
-    if (input === PARTNER_PASSWORD) {
-      setIdentity('xiaopang');
-      sessionStorage.setItem('partner_unlocked', 'true');
-      hideSwitchPasswordOverlay();
-      showToast('已切换为小胖 💝');
-      if (currentTab === 'partner') initPartnerTab();
+  function updateAuthUI() {
+    const btn = $('#identity-switch-btn');
+    if (!btn) return;
+    if (authUser) {
+      btn.textContent = myProfile?.nickname || authUser.email;
+      btn.classList.add('logged-in');
+      $('#auth-menu-logout').classList.remove('hidden');
+      $('#auth-menu-invite').classList.remove('hidden');
+      if (isPaired()) {
+        $('#auth-menu-invite').textContent = '已配对 💑';
+      } else {
+        $('#auth-menu-invite').textContent = '邀请码: ' + (myProfile?.invite_code || '—');
+      }
     } else {
-      $('#switch-password-error').classList.remove('hidden');
-      $('#switch-password-input').value = '';
+      btn.textContent = '登录';
+      btn.classList.remove('logged-in');
+      $('#auth-menu-logout').classList.add('hidden');
+      $('#auth-menu-invite').classList.add('hidden');
+    }
+
+    // Tab 可见性：未登录隐藏"我们"；未配对隐藏"记录/纸团/时间轴/悄悄话"
+    const paired = isPaired();
+    const partnerNav = $('.nav-btn[data-tab="partner"]');
+    if (partnerNav) partnerNav.classList.toggle('hidden', !isLoggedIn());
+    ['record', 'quotes', 'timeline', 'whispers'].forEach(t => {
+      const nav = $(`.nav-btn[data-tab="${t}"]`);
+      if (nav) nav.classList.toggle('hidden', !paired);
+    });
+
+    // 如果当前 Tab 被隐藏了，切回首页
+    if (!paired && ['record', 'quotes', 'timeline', 'whispers'].includes(currentTab)) {
+      switchTab('home');
+    }
+  }
+
+  function showAuthPage(mode) {
+    mode = mode || 'login';
+    $('#auth-page').classList.remove('hidden');
+    $('#app').classList.add('hidden');
+    $('.bottom-nav').classList.add('hidden');
+    $('#auth-email').value = '';
+    $('#auth-password').value = '';
+    $('#auth-error').classList.add('hidden');
+    $('#auth-page').dataset.mode = mode;
+    if (mode === 'login') {
+      $('#auth-submit').textContent = '登录';
+      $('.auth-switch').innerHTML = '还没有账号？<button id="auth-switch-link">立即注册</button>';
+    } else {
+      $('#auth-submit').textContent = '注册';
+      $('.auth-switch').innerHTML = '已有账号？<button id="auth-switch-link">立即登录</button>';
+    }
+    document.getElementById('auth-switch-link')?.addEventListener('click', () => {
+      showAuthPage(mode === 'login' ? 'register' : 'login');
+    });
+  }
+
+  function hideAuthPage() {
+    $('#auth-page').classList.add('hidden');
+    $('#app').classList.remove('hidden');
+    $('.bottom-nav').classList.remove('hidden');
+  }
+
+  async function handleAuthSubmit() {
+    const email = $('#auth-email').value.trim();
+    const password = $('#auth-password').value;
+    if (!email || !password) {
+      $('#auth-error').textContent = '请填写邮箱和密码';
+      $('#auth-error').classList.remove('hidden');
+      return;
+    }
+    $('#auth-error').classList.add('hidden');
+    $('#auth-submit').disabled = true;
+    $('#auth-submit').textContent = '处理中...';
+    try {
+      const mode = $('#auth-page').dataset.mode || 'login';
+      if (mode === 'login') {
+        await db.signIn(email, password);
+        showToast('登录成功');
+        hideAuthPage();
+        await initAuth();
+        // 登录后默认显示"去配对"引导页面
+        switchTab('partner');
+      } else {
+        await db.signUp(email, password);
+        await db.signOut();
+        showToast('注册成功，请登录');
+        showAuthPage('login');
+      }
+    } catch (e) {
+      $('#auth-error').textContent = e.message || '操作失败，请重试';
+      $('#auth-error').classList.remove('hidden');
+    }
+    $('#auth-submit').disabled = false;
+    $('#auth-submit').textContent = $('#auth-page').dataset.mode === 'login' ? '登录' : '注册';
+  }
+
+  async function handleLogout() {
+    if (!confirm('确定退出登录？')) return;
+    // 清理 Realtime 订阅
+    if (whisperSub) { whisperSub.unsubscribe(); whisperSub = null; }
+    if (timelineSub) { timelineSub.unsubscribe(); timelineSub = null; }
+    if (rrSub) { rrSub.unsubscribe(); rrSub = null; }
+    rrSubscribed = false;
+    await db.signOut();
+    authUser = null;
+    myProfile = null;
+    mySpace = null;
+    partnerProfile = null;
+    db.setUserId(null);
+    updateAuthUI();
+    showToast('已退出');
+    showAuthPage('login');
+  }
+
+  // 空间创建/加入
+  function showSpaceSetupModal() {
+    $('#space-modal').classList.remove('hidden');
+    $('#space-error').classList.add('hidden');
+  }
+
+  function hideSpaceModal() {
+    $('#space-modal').classList.add('hidden');
+  }
+
+  async function handleCreateSpace() {
+    const nickname = $('#space-nickname').value.trim() || '用户';
+    $('#space-error').classList.add('hidden');
+    try {
+      const space = await db.createSpace(authUser.id, nickname);
+      await reloadProfile();
+      updateAuthUI();
+      hideSpaceModal();
+      showToast('空间创建成功，邀请码: ' + space.invite_code);
+    } catch (e) {
+      $('#space-error').textContent = e.message || '创建失败';
+      $('#space-error').classList.remove('hidden');
+    }
+  }
+
+  async function handleJoinSpace() {
+    const code = $('#space-invite-code').value.trim();
+    if (!code) {
+      $('#space-error').textContent = '请输入邀请码';
+      $('#space-error').classList.remove('hidden');
+      return;
+    }
+    try {
+      await db.joinSpace(authUser.id, code);
+      await reloadProfile();
+      updateAuthUI();
+      hideSpaceModal();
+      showToast('配对成功 💑');
+    } catch (e) {
+      $('#space-error').textContent = e.message || '加入失败';
+      $('#space-error').classList.remove('hidden');
     }
   }
 
@@ -242,17 +433,79 @@
   }
 
   function switchTab(tab) {
+    // 未配对不能进入记录/时间轴/悄悄话
+    if (['record', 'quotes', 'timeline', 'whispers'].includes(tab) && !isPaired()) {
+      tab = 'home';
+      showToast('请先配对后再使用此功能');
+    }
     currentTab = tab;
+    sessionStorage.setItem('emoBox_tab', tab);
     $$('.tab-content').forEach(s => s.classList.add('hidden'));
     $(`#tab-${tab}`).classList.remove('hidden');
     $$('.nav-btn').forEach(b => b.classList.remove('active'));
     $(`.nav-btn[data-tab="${tab}"]`).classList.add('active');
 
-    if (tab === 'record') initRecordTab();
+    // 切换按钮显示控制
+    const switchBtn = $('#identity-switch-btn');
+    if (tab === 'record') switchBtn.classList.remove('hidden');
+    else switchBtn.classList.add('hidden');
+
+    stopTimelinePolling();
+    if (tab === 'home') initHomeTab();
+    else if (tab === 'record') initRecordTab();
     else if (tab === 'quotes') initQuotesTab();
     else if (tab === 'timeline') initTimelineTab();
     else if (tab === 'whispers') initWhispersTab();
     else if (tab === 'partner') initPartnerTab();
+  }
+
+  // ==================== 首页 Tab ====================
+  function animateDaysCount(target) {
+    const el = $('#home-days-count');
+    if (!el) return;
+    const start = 0;
+    const duration = 1200;
+    const startTime = performance.now();
+    function step(now) {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // ease-out
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const current = Math.round(start + (target - start) * eased);
+      el.textContent = current;
+      if (progress < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  function initHomeTab() {
+    if (!isLoggedIn()) {
+      $('#home-unpaired').classList.remove('hidden');
+      $('#home-paired').classList.add('hidden');
+      return;
+    }
+
+    if (mySpace?.partner_id && partnerProfile) {
+      // 已配对 → 显示在一起天数
+      $('#home-unpaired').classList.add('hidden');
+      $('#home-paired').classList.remove('hidden');
+
+      $('#home-name-me').textContent = myProfile?.nickname || '我';
+      $('#home-name-partner').textContent = partnerProfile?.nickname || 'TA';
+
+      if (mySpace.anniversary_date) {
+        const start = new Date(mySpace.anniversary_date);
+        const today = new Date();
+        const days = Math.floor((today - start) / (1000 * 60 * 60 * 24)) + 1;
+        animateDaysCount(days);
+      } else {
+        $('#home-days-count').textContent = '♥';
+      }
+    } else {
+      // 已登录但未配对
+      $('#home-unpaired').classList.remove('hidden');
+      $('#home-paired').classList.add('hidden');
+    }
   }
 
   // ==================== 记录 Tab ====================
@@ -447,7 +700,7 @@
 
   async function drawQuote() {
     const emotion = EMOTIONS[quoteEmotionIndex];
-    const quote = await db.getAvailableQuote(emotion.name, getIdentity());
+    const quote = await db.getAvailableQuote(emotion.name);
     if (!quote) {
       $('#paper-ball').classList.add('hidden');
       $('#paper-result').classList.add('hidden');
@@ -469,47 +722,82 @@
   }
 
   // ==================== 时间轴 Tab ====================
-  async function initTimelineTab() {
-    selectedTimelineMood = null;
-    timelineOffset = 0;
-    renderEmotionSelector('#timeline-emotion-selector', selectedTimelineMood, (idx) => {
-      selectedTimelineMood = idx;
+  let timelineSortAsc = false;
+  let pendingTimelinePhoto = null;
+
+  function compressImage(file, maxWidth = 1200, maxHeight = 1200, quality = 0.75) {
+    return new Promise((resolve) => {
+      if (!file.type.startsWith('image/')) { resolve(file); return; }
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let { width, height } = img;
+        let newWidth = width;
+        let newHeight = height;
+
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            if (width > maxWidth) { newHeight = Math.round(height * maxWidth / width); newWidth = maxWidth; }
+          } else {
+            if (height > maxHeight) { newWidth = Math.round(width * maxHeight / height); newHeight = maxHeight; }
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = newWidth;
+        canvas.height = newHeight;
+        canvas.getContext('2d').drawImage(img, 0, 0, newWidth, newHeight);
+        canvas.toBlob((blob) => {
+          if (blob) {
+            resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+          } else {
+            resolve(file);
+          }
+        }, 'image/jpeg', quality);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
     });
-    $('#timeline-note-input').value = '';
-    pendingTimelinePhotos = [];
-    $('#timeline-photo-preview').innerHTML = '';
-    await loadTimeline(true);
   }
 
-  async function saveTimelineMood() {
-    if (selectedTimelineMood === null) { showToast('请先选择一个心情哦'); return; }
-    const note = $('#timeline-note-input').value.trim();
-    const emotion = EMOTIONS[selectedTimelineMood];
+  let timelinePollTimer = null;
+  let timelineLastCount = 0;
 
-    try {
-      const imageUrls = await uploadPendingPhotos(pendingTimelinePhotos);
-      console.log('[时间轴] upload返回URLs:', JSON.stringify(imageUrls));
-      const saved = await db.saveRecord({
-        date: todayStr(),
-        mood: emotion.name,
-        note,
-        type: 'mood',
-        author: getIdentity(),
-        images: imageUrls
-      });
-      console.log('[时间轴] 保存结果 images:', JSON.stringify(saved?.images));
-      playPaperPlane();
-      showToast('已记录');
-      // 重置表单并刷新
-      selectedTimelineMood = null;
-      $('#timeline-note-input').value = '';
-      $('#timeline-photo-preview').innerHTML = '';
-      renderEmotionSelector('#timeline-emotion-selector', null, (idx) => { selectedTimelineMood = idx; });
-      await loadTimeline(true);
-    } catch (e) {
-      console.error('保存失败:', e);
-      showToast('保存失败，请稍后再试');
-    }
+  function startTimelinePolling() {
+    stopTimelinePolling();
+    timelinePollTimer = setInterval(async () => {
+      try {
+        const count = await db.getTimelineEventCount();
+        if (count !== timelineLastCount) {
+          timelineLastCount = count;
+          await loadTimeline(true);
+        }
+      } catch (e) { /* polling silently fails */ }
+    }, 30000);
+  }
+
+  function stopTimelinePolling() {
+    if (timelinePollTimer) { clearInterval(timelinePollTimer); timelinePollTimer = null; }
+  }
+
+  async function initTimelineTab() {
+    timelineOffset = 0;
+    const dateInput = $('#timeline-date-input');
+    if (!dateInput.value) dateInput.value = todayStr();
+    pendingTimelinePhoto = null;
+    $('#timeline-photo-preview').innerHTML = '';
+    setupTimelineRealtime();
+    await loadTimeline(true);
+    timelineLastCount = parseInt($('#timeline-event-count').textContent) || 0;
+    startTimelinePolling();
+  }
+
+  function toggleTimelineSort() {
+    timelineSortAsc = !timelineSortAsc;
+    const btn = $('#timeline-sort-btn');
+    btn.textContent = timelineSortAsc ? '最新在前' : '最早在前';
+    loadTimeline(true);
   }
 
   async function loadTimeline(reset) {
@@ -518,74 +806,349 @@
       $('#timeline-container').innerHTML = '';
     }
 
-    const records = await db.getTimeline(TIMELINE_PAGE, timelineOffset);
-    if (records.length === 0 && reset) {
-      $('#timeline-container').innerHTML = '<p class="empty-hint">还没有记录，记录此刻的心情吧</p>';
+    let events;
+    try {
+      events = await db.getTimelineEvents(TIMELINE_PAGE, timelineOffset);
+    } catch (e) {
+      console.error('[时间轴] 加载失败:', e);
+      showToast('加载失败: ' + (e.message || '未知错误'));
+      if (reset) {
+        $('#timeline-container').innerHTML = '<p class="timeline-empty">加载失败，请下拉刷新</p>';
+      }
       return;
     }
 
-    const grouped = {};
-    records.forEach(r => {
-      const d = new Date(r.date);
-      const key = formatMonth(d.getFullYear(), d.getMonth() + 1);
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(r);
+    // 如果默认降序，需要在前端反转（数据库始终按 date DESC 查，再反转）
+    const sorted = timelineSortAsc ? [...events].reverse() : events;
+
+    if (sorted.length === 0 && reset) {
+      $('#timeline-container').innerHTML = '<p class="timeline-empty">还没有共同回忆，来记录第一条吧</p>';
+      $('#timeline-event-count').textContent = '0 个共同回忆';
+      return;
+    }
+
+    // 按月份分组
+    const grouped = new Map();
+    sorted.forEach(e => {
+      const d = new Date(e.date);
+      const key = `${d.getFullYear()}年${d.getMonth() + 1}月`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(e);
     });
 
     const container = $('#timeline-container');
+    if (reset) container.innerHTML = '';
 
-    Object.keys(grouped).sort().reverse().forEach(month => {
-      let monthHeader = container.querySelector(`[data-month="${month}"]`);
-      if (!monthHeader) {
-        monthHeader = document.createElement('div');
-        monthHeader.className = 'timeline-month';
-        monthHeader.dataset.month = month;
-        monthHeader.textContent = month;
-        container.appendChild(monthHeader);
-      }
+    const monthKeys = timelineSortAsc ? [...grouped.keys()] : [...grouped.keys()].reverse();
 
-      grouped[month].forEach(r => {
-        const card = document.createElement('div');
-        card.className = 'timeline-card';
+    monthKeys.forEach(month => {
+      // 月份标签
+      const label = document.createElement('div');
+      label.className = 'timeline-month-label';
+      label.textContent = month;
+      container.appendChild(label);
 
-        const moodEmoji = r.mood ? (EMOTIONS.find(e => e.name === r.mood)?.emoji || '') : '';
-        const timeStr = formatTime(r.created_at);
-        const authorName = r.author === 'xiaopang' ? '💝 小胖' : '🥰 肥纯';
-        const authorClass = r.author === 'xiaopang' ? 'xiaopang' : 'feichun';
+      const events = grouped.get(month);
+      (timelineSortAsc ? events : [...events].reverse()).forEach(e => {
+        const d = new Date(e.date);
+        const dateStr = `${d.getMonth() + 1}月${d.getDate()}日`;
+        const locationStr = [e.city, e.place].filter(Boolean).join(' · ');
 
-        let imagesHtml = '';
-        console.log('[时间轴] 渲染记录 images 字段:', r.images, 'type:', typeof r.images, 'isArray:', Array.isArray(r.images));
-        if (r.images && r.images.length > 0) {
-          imagesHtml = `<div class="timeline-images">${r.images.map(url =>
-            `<img src="${url}" alt="" loading="lazy" onerror="console.log('[时间轴] 图片加载失败:', this.src)" onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${url}'">`
-          ).join('')}</div>`;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'timeline-event';
+        wrapper.dataset.id = e.id;
+
+        let imageHtml = '';
+        if (e.image) {
+          imageHtml = `<img src="${e.image}" alt="" class="timeline-event-image" loading="lazy"
+            onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${e.image}'">`;
         }
 
-        card.innerHTML = `
-          <div class="timeline-card-header">
-            <span class="timeline-author ${authorClass}">${authorName}</span>
-            <span class="timeline-type-badge">${moodEmoji} ${r.mood || ''}</span>
-            <span class="timeline-time">${timeStr}</span>
-          </div>
-          <div class="timeline-card-body">
-            ${r.note ? `<p class="timeline-note">${escapeHtml(r.note)}</p>` : ''}
-            ${imagesHtml}
+        let noteHtml = '';
+        if (e.note) {
+          noteHtml = `<div class="timeline-event-note">${escapeHtml(e.note)}</div>`;
+        }
+        let locationHtml = '';
+        if (locationStr) {
+          locationHtml = `<div class="timeline-event-location">${escapeHtml(locationStr)}</div>`;
+        }
+
+        wrapper.innerHTML = `
+          <div class="timeline-event-dot"></div>
+          <div class="timeline-event-card">
+            <div class="timeline-event-header">
+              <div class="timeline-event-date">${dateStr}</div>
+              <div class="timeline-event-actions">
+                <button class="timeline-event-edit" data-id="${e.id}" title="编辑">✏️</button>
+                <button class="timeline-event-delete" data-id="${e.id}" title="删除">🗑️</button>
+              </div>
+            </div>
+            ${noteHtml}
+            ${locationHtml}
+            ${e.image ? imageHtml : ''}
           </div>
         `;
-        container.appendChild(card);
+        container.appendChild(wrapper);
+
+        // 编辑按钮
+        wrapper.querySelector('.timeline-event-edit').addEventListener('click', function () {
+          startEditTimelineEvent(this.dataset.id);
+        });
+        // 删除按钮
+        wrapper.querySelector('.timeline-event-delete').addEventListener('click', function () {
+          deleteTimelineEvent(this.dataset.id);
+        });
       });
     });
 
-    timelineOffset += records.length;
-    if (records.length === TIMELINE_PAGE) {
+    timelineOffset += sorted.length;
+    if (sorted.length === TIMELINE_PAGE) {
       $('#timeline-load-more').classList.remove('hidden');
     } else {
       $('#timeline-load-more').classList.add('hidden');
     }
+
+    // 更新计数
+    updateTimelineCount();
+  }
+
+  async function updateTimelineCount() {
+    try {
+      const count = await db.getTimelineEventCount();
+      $('#timeline-event-count').textContent = `${count} 个共同回忆`;
+    } catch (e) { /* ignore */ }
+  }
+
+  function buildTimelineCardHTML({ date, city, place, note, imageUrl, previewUrl }) {
+    const d = new Date(date);
+    const dateStr = `${d.getMonth() + 1}月${d.getDate()}日`;
+    const locationStr = [city, place].filter(Boolean).join(' · ');
+    let imageHtml = '';
+    if (imageUrl || previewUrl) {
+      const src = previewUrl || imageUrl;
+      imageHtml = `<img src="${src}" alt="" class="timeline-event-image" loading="lazy">`;
+    }
+    let noteHtml = '';
+    if (note) { noteHtml = `<div class="timeline-event-note">${escapeHtml(note)}</div>`; }
+    let locationHtml = '';
+    if (locationStr) { locationHtml = `<div class="timeline-event-location">${escapeHtml(locationStr)}</div>`; }
+    return `
+      <div class="timeline-event-dot"></div>
+      <div class="timeline-event-card">
+        <div class="timeline-event-date">${dateStr}</div>
+        ${noteHtml}
+        ${locationHtml}
+        ${imageHtml}
+        <div class="timeline-event-status">保存中...</div>
+      </div>`;
+  }
+
+  function insertTimelineCard(wrapper, date) {
+    const d = new Date(date);
+    const monthKey = `${d.getFullYear()}年${d.getMonth() + 1}月`;
+    const container = $('#timeline-container');
+    const emptyEl = container.querySelector('.timeline-empty');
+    if (emptyEl) emptyEl.remove();
+    const labels = container.querySelectorAll('.timeline-month-label');
+    for (const label of labels) {
+      if (label.textContent === monthKey) {
+        label.insertAdjacentElement('afterend', wrapper);
+        return;
+      }
+    }
+    const monthLabel = document.createElement('div');
+    monthLabel.className = 'timeline-month-label';
+    monthLabel.textContent = monthKey;
+    container.insertBefore(monthLabel, container.firstChild);
+    container.insertBefore(wrapper, monthLabel.nextSibling);
+  }
+
+  async function saveTimelineEvent() {
+    const dateInput = $('#timeline-date-input');
+    const cityInput = $('#timeline-city-input');
+    const placeInput = $('#timeline-place-input');
+    const noteInput = $('#timeline-note-input');
+
+    const date = dateInput.value;
+    const city = cityInput.value.trim();
+    const place = placeInput.value.trim();
+    const note = noteInput.value.trim();
+
+    if (!date) { showToast('请选择日期'); return; }
+    if (!note && !city && !place) { showToast('请至少填写事情描述或地点'); return; }
+
+    const tempId = 'pending_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const photo = pendingTimelinePhoto;
+    const previewUrl = photo ? URL.createObjectURL(photo) : null;
+
+    // 乐观插入 DOM
+    const wrapper = document.createElement('div');
+    wrapper.className = 'timeline-event timeline-event-pending';
+    wrapper.id = tempId;
+    wrapper.innerHTML = buildTimelineCardHTML({ date, city, place, note, previewUrl });
+    insertTimelineCard(wrapper, date);
+
+    // 重置表单
+    cityInput.value = '';
+    placeInput.value = '';
+    noteInput.value = '';
+    pendingTimelinePhoto = null;
+    $('#timeline-photo-preview').innerHTML = '';
+
+    playPaperPlane();
+    showToast('已记录');
+
+    // 后台异步保存
+    try {
+      let imageUrl = null;
+      if (photo) {
+        const compressed = await compressImage(photo);
+        const uploadResult = await db.uploadImage(compressed);
+        imageUrl = uploadResult.url;
+      }
+
+      const saved = await db.addTimelineEvent({
+        date, city, place, note,
+        image: imageUrl,
+        author: getIdentity()
+      });
+
+      // 成功：更新 DOM
+      const el = document.getElementById(tempId);
+      if (el) {
+        el.classList.remove('timeline-event-pending');
+        const statusEl = el.querySelector('.timeline-event-status');
+        if (statusEl) {
+          const btn = document.createElement('button');
+          btn.className = 'timeline-event-delete';
+          btn.dataset.id = saved.id;
+          btn.textContent = '删除';
+          btn.addEventListener('click', function () { deleteTimelineEvent(this.dataset.id); });
+          statusEl.replaceWith(btn);
+        }
+        if (imageUrl && previewUrl && imageUrl !== previewUrl) {
+          const img = el.querySelector('.timeline-event-image');
+          if (img) img.src = imageUrl;
+        }
+        updateTimelineCount();
+      }
+    } catch (e) {
+      console.error('[时间轴] 后台保存失败:', e);
+      const el = document.getElementById(tempId);
+      if (el) {
+        el.classList.remove('timeline-event-pending');
+        el.classList.add('timeline-event-failed');
+        const statusEl = el.querySelector('.timeline-event-status');
+        if (statusEl) { statusEl.textContent = '保存失败'; }
+      }
+      updateTimelineCount();
+    }
+  }
+
+  async function deleteTimelineEvent(id) {
+    if (!confirm('确定删除这条回忆吗？')) return;
+    try {
+      await db.deleteTimelineEvent(id);
+      showToast('已删除');
+      await loadTimeline(true);
+    } catch (e) {
+      console.error('[时间轴] 删除失败:', e);
+      showToast('删除失败');
+    }
+  }
+
+  // 编辑时间轴事件
+  async function startEditTimelineEvent(id) {
+    const wrapper = $(`.timeline-event[data-id="${id}"]`);
+    if (!wrapper) return;
+    const card = wrapper.querySelector('.timeline-event-card');
+    if (!card) return;
+
+    // 从数据库获取最新数据
+    const events = await db.getTimelineEvents(100, 0);
+    const event = events.find(e => e.id === id);
+    if (!event) { showToast('记录不存在'); return; }
+
+    card.innerHTML = `
+      <div class="tl-edit-field">
+        <label>日期</label>
+        <input type="date" class="tl-edit-date" value="${event.date}">
+      </div>
+      <div class="tl-edit-row">
+        <div class="tl-edit-field">
+          <label>城市</label>
+          <input type="text" class="tl-edit-city" value="${escapeHtml(event.city || '')}" placeholder="城市">
+        </div>
+        <div class="tl-edit-field">
+          <label>地点</label>
+          <input type="text" class="tl-edit-place" value="${escapeHtml(event.place || '')}" placeholder="地点">
+        </div>
+      </div>
+      <div class="tl-edit-field">
+        <label>描述</label>
+        <textarea class="tl-edit-note" rows="2" placeholder="记录...">${escapeHtml(event.note || '')}</textarea>
+      </div>
+      <div class="tl-edit-btns">
+        <button class="tl-edit-cancel">取消</button>
+        <button class="tl-edit-save">保存</button>
+      </div>
+    `;
+
+    // 取消 → 重新加载恢复原样
+    card.querySelector('.tl-edit-cancel').addEventListener('click', () => loadTimeline(true));
+
+    // 保存
+    card.querySelector('.tl-edit-save').addEventListener('click', async () => {
+      const updates = {
+        date: card.querySelector('.tl-edit-date').value,
+        city: card.querySelector('.tl-edit-city').value.trim(),
+        place: card.querySelector('.tl-edit-place').value.trim(),
+        note: card.querySelector('.tl-edit-note').value.trim(),
+      };
+      if (!updates.date) { showToast('请选择日期'); return; }
+      try {
+        await db.updateTimelineEvent(id, updates);
+        showToast('已更新');
+        playPaperPlane();
+        await loadTimeline(true);
+      } catch (e) {
+        console.error('[时间轴] 更新失败:', e);
+        showToast('更新失败');
+      }
+    });
+  }
+
+  // 时间轴照片选择
+  function setupTimelinePhoto() {
+    const btn = $('#timeline-photo-btn');
+    const input = $('#timeline-photo-input');
+    const preview = $('#timeline-photo-preview');
+
+    btn.addEventListener('click', () => input.click());
+
+    input.addEventListener('change', () => {
+      if (input.files.length > 0) {
+        pendingTimelinePhoto = input.files[0];
+        const url = URL.createObjectURL(pendingTimelinePhoto);
+        preview.innerHTML = `<div class="photo-thumb">
+          <img src="${url}" alt="">
+          <button class="photo-thumb-remove" id="timeline-photo-remove">✕</button>
+        </div>`;
+        $('#timeline-photo-remove').addEventListener('click', (e) => {
+          e.stopPropagation();
+          pendingTimelinePhoto = null;
+          preview.innerHTML = '';
+          input.value = '';
+        });
+        input.value = '';
+      }
+    });
   }
 
   // ==================== 悄悄话 Tab ====================
   let whisperSub = null;
+  let timelineSub = null;
+  let rrSub = null;
 
   async function initWhispersTab() {
     await loadWhispers();
@@ -610,8 +1173,11 @@
         html += `<div class="whisper-date-divider">${formatDate(dateStr)}</div>`;
       }
       const emotionEmoji = EMOTIONS.find(e => e.name === w.emotion)?.emoji || '💬';
+      const isSent = w.sender === (myProfile?.nickname || '');
+      const senderLabel = isSent ? '' : `<div class="whisper-bubble-sender">${escapeHtml(partnerProfile?.nickname || 'TA')}</div>`;
       html += `
-        <div class="whisper-bubble ${w.sender}">
+        <div class="whisper-bubble ${isSent ? 'sent' : 'received'}">
+          ${senderLabel}
           <div class="whisper-bubble-emotion">${emotionEmoji}</div>
           <div>${escapeHtml(w.content)}</div>
           <div class="whisper-bubble-time">${formatTime(w.created_at)}</div>
@@ -626,6 +1192,16 @@
     if (whisperSub) whisperSub.unsubscribe();
     whisperSub = db.subscribeToWhispers(payload => {
       if (currentTab === 'whispers') loadWhispers();
+    });
+  }
+
+  function setupTimelineRealtime() {
+    if (timelineSub) timelineSub.unsubscribe();
+    timelineSub = db.subscribeToTimelineEvents(payload => {
+      if (currentTab === 'timeline') {
+        timelineLastCount = parseInt($('#timeline-event-count').textContent) + 1 || 0;
+        loadTimeline(true);
+      }
     });
   }
 
@@ -649,42 +1225,262 @@
     select.innerHTML = EMOTIONS.map(e => `<option value="${e.name}">${e.emoji}</option>`).join('');
   }
 
+  // ==================== 复制邀请码 ====================
+  function copyInviteCode() {
+    const code = $('#my-invite-code')?.textContent || $('#my-invite-code-paired')?.textContent;
+    if (!code || code === '———') return;
+    navigator.clipboard.writeText(code).then(() => {
+      showToast('已复制邀请码');
+    }).catch(() => {
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = code;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      showToast('已复制邀请码');
+    });
+  }
+
   // ==================== 我们 Tab ====================
-  function initPartnerTab() {
-    // 肥纯不能访问此 Tab（导航已隐藏，防御性检查）
-    if (getIdentity() !== 'xiaopang') {
+  // ========== 我们 Tab — 恋爱请求配对 ==========
+  let partnerSearchResult = null;
+  let partnerRequests = [];
+  let rrSubscribed = false;
+
+  async function initPartnerTab() {
+    if (!isLoggedIn()) {
+      showToast('请先登录');
       switchTab('record');
       return;
     }
-    if (sessionStorage.getItem('partner_unlocked') === 'true') {
-      showPartnerContent();
+
+    // 刷新个人信息（可能配对刚被接受）
+    await reloadProfile();
+
+    // 显示昵称
+    const nickname = myProfile?.nickname || '用户';
+    if ($('#my-nickname')) $('#my-nickname').textContent = nickname;
+    if ($('#my-nickname-unpaired')) $('#my-nickname-unpaired').textContent = nickname;
+
+    // 显示头像
+    const avatarUrl = myProfile?.avatar_url;
+    const avatarPaired = $('#my-avatar-paired');
+    const avatarUnpaired = $('#my-avatar-unpaired');
+
+    if (avatarUrl) {
+      if (avatarPaired) {
+        avatarPaired.style.backgroundImage = `url(${avatarUrl})`;
+        avatarPaired.style.backgroundSize = 'cover';
+        avatarPaired.style.backgroundPosition = 'center';
+        avatarPaired.textContent = '';
+      }
+      if (avatarUnpaired) {
+        avatarUnpaired.style.backgroundImage = `url(${avatarUrl})`;
+        avatarUnpaired.style.backgroundSize = 'cover';
+        avatarUnpaired.style.backgroundPosition = 'center';
+        avatarUnpaired.textContent = '';
+      }
     } else {
-      showPartnerGate();
+      if (avatarPaired) {
+        avatarPaired.style.backgroundImage = '';
+        avatarPaired.textContent = '💞';
+      }
+      if (avatarUnpaired) {
+        avatarUnpaired.style.backgroundImage = '';
+        avatarUnpaired.textContent = '👤';
+      }
+    }
+
+    // 已配对的显示配对信息
+    if (mySpace?.partner_id && partnerProfile) {
+      $('#partner-paired').classList.remove('hidden');
+      $('#partner-unpaired').classList.add('hidden');
+      // 回填纪念日
+      if (mySpace.anniversary_date) {
+        $('#anniversary-date-input').value = mySpace.anniversary_date;
+      }
+      // 显示邀请码
+      try {
+        const code = await db.getMyInviteCode(authUser.id);
+        if ($('#my-invite-code-paired')) $('#my-invite-code-paired').textContent = code;
+      } catch (e) {
+        if ($('#my-invite-code-paired')) $('#my-invite-code-paired').textContent = '获取中...';
+      }
+      return;
+    }
+
+    // 未配对 — 显示配对界面
+    $('#partner-paired').classList.add('hidden');
+    $('#partner-unpaired').classList.remove('hidden');
+
+    // 加载我的邀请码
+    try {
+      const code = await db.getMyInviteCode(authUser.id);
+      $('#my-invite-code').textContent = code;
+    } catch (e) {
+      $('#my-invite-code').textContent = '获取中...';
+    }
+
+    // 加载待处理的请求
+    await loadPendingRequests();
+    // 加载已发送请求状态
+    await loadSentRequests();
+
+    // 订阅实时请求通知
+    if (!rrSubscribed) {
+      rrSubscribed = true;
+      rrSub = db.subscribeToRelationshipRequests(authUser.id, (req) => {
+        showToast('收到新的恋爱请求！');
+        loadPendingRequests();
+      });
     }
   }
 
-  function showPartnerGate() {
-    $('#partner-gate').classList.remove('hidden');
-    $('#partner-content').classList.add('hidden');
+  // 搜索对方的邀请码
+  async function searchPartner() {
+    const code = $('#partner-search-input').value.trim();
+    if (!code) {
+      $('#partner-search-error').textContent = '请输入邀请码';
+      $('#partner-search-error').classList.remove('hidden');
+      return;
+    }
+    $('#partner-search-error').classList.add('hidden');
+    $('#partner-search-result').classList.add('hidden');
+    $('#partner-search-btn').disabled = true;
+    $('#partner-search-btn').textContent = '搜索中...';
+
+    try {
+      const result = await db.searchByInviteCode(code);
+      if (result.id === authUser.id) {
+        $('#partner-search-error').textContent = '这是你自己的邀请码哦';
+        $('#partner-search-error').classList.remove('hidden');
+        return;
+      }
+      partnerSearchResult = result;
+      $('#partner-result-name').textContent = result.nickname || '未知用户';
+      $('#partner-result-code').textContent = '邀请码: ' + result.invite_code;
+      $('#partner-search-result').classList.remove('hidden');
+      // 清除之前的已发送状态
+      $('#partner-sent-status').classList.add('hidden');
+      $('#partner-sent-status').innerHTML = '';
+    } catch (e) {
+      $('#partner-search-error').textContent = e.message || '未找到该用户';
+      $('#partner-search-error').classList.remove('hidden');
+      partnerSearchResult = null;
+    } finally {
+      $('#partner-search-btn').disabled = false;
+      $('#partner-search-btn').textContent = '搜索';
+    }
   }
 
-  function showPartnerContent() {
-    $('#partner-gate').classList.add('hidden');
-    $('#partner-content').classList.remove('hidden');
+  // 发送恋爱请求
+  async function sendRelationshipRequest() {
+    if (!partnerSearchResult) return;
+    try {
+      await db.sendRelationshipRequest(authUser.id, partnerSearchResult.id);
+      $('#partner-search-result').classList.add('hidden');
+      showToast('恋爱请求已发送');
+      await loadSentRequests();
+    } catch (e) {
+      showToast(e.message || '发送失败');
+    }
   }
 
-  function unlockPartner() {
-    const input = $('#partner-password').value.trim();
-    if (input === PARTNER_PASSWORD) {
-      sessionStorage.setItem('partner_unlocked', 'true');
-      setIdentity('xiaopang');
-      $('#partner-error').classList.add('hidden');
-      $('#partner-password').value = '';
-      showPartnerContent();
-      showToast('已切换为小胖身份');
-    } else {
-      $('#partner-error').classList.remove('hidden');
-      $('#partner-password').value = '';
+  // 加载发给我的请求
+  async function loadPendingRequests() {
+    const container = $('#partner-incoming-requests');
+    const sentContainer = $('#partner-sent-status');
+    try {
+      const requests = await db.getPendingRequests(authUser.id);
+      partnerRequests = requests;
+      if (requests.length === 0) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        // 如果有已发送的请求，不清除
+        return;
+      }
+
+      container.classList.remove('hidden');
+      container.innerHTML = '<p class="partner-incoming-title">收到的恋爱请求</p>' +
+        requests.map(r => {
+          const nickname = r.profiles?.nickname || '未知用户';
+          return `
+            <div class="incoming-request-card">
+              <div class="incoming-request-info">
+                <p class="incoming-request-from">${escapeHtml(nickname)}</p>
+                <p class="incoming-request-label">想和你建立恋爱关系</p>
+              </div>
+              <div class="incoming-request-actions">
+                <button class="btn-accept" data-accept="${r.id}">同意</button>
+                <button class="btn-reject" data-reject="${r.id}">拒绝</button>
+              </div>
+            </div>`;
+        }).join('');
+
+      // 绑定事件
+      container.querySelectorAll('[data-accept]').forEach(btn => {
+        btn.addEventListener('click', () => handleAcceptRequest(btn.dataset.accept));
+      });
+      container.querySelectorAll('[data-reject]').forEach(btn => {
+        btn.addEventListener('click', () => handleRejectRequest(btn.dataset.reject));
+      });
+    } catch (e) {
+      console.error('加载请求失败:', e);
+    }
+  }
+
+  // 加载我发出的请求状态
+  async function loadSentRequests() {
+    const container = $('#partner-sent-status');
+    try {
+      const sent = await db.getMySentRequests(authUser.id);
+      const pendingSent = sent.filter(r => r.status === 'pending');
+      if (pendingSent.length === 0) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+      }
+      container.classList.remove('hidden');
+      container.innerHTML = pendingSent.map(r => {
+        const name = r.profiles?.nickname || '未知用户';
+        return `<div class="partner-sent-status">
+          <p class="partner-sent-text">已向 ${escapeHtml(name)} 发送恋爱请求</p>
+          <p class="partner-sent-sub">等待对方回应...</p>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      // 静默处理
+    }
+  }
+
+  // 同意请求
+  async function handleAcceptRequest(requestId) {
+    try {
+      await db.acceptRequest(requestId, authUser.id);
+      await reloadProfile();
+      updateAuthUI();
+      showToast('配对成功 💑');
+      // 隐藏请求列表
+      $('#partner-incoming-requests').classList.add('hidden');
+      $('#partner-sent-status').classList.add('hidden');
+      // 重新加载此 Tab
+      initPartnerTab();
+    } catch (e) {
+      showToast(e.message || '操作失败');
+    }
+  }
+
+  // 拒绝请求
+  async function handleRejectRequest(requestId) {
+    if (!confirm('确定拒绝这个请求吗？')) return;
+    try {
+      await db.rejectRequest(requestId, authUser.id);
+      showToast('已拒绝');
+      await loadPendingRequests();
+    } catch (e) {
+      showToast(e.message || '操作失败');
     }
   }
 
@@ -698,7 +1494,7 @@
     const content = $('#new-quote-content').value.trim();
     if (!content) { showToast('请输入话语内容'); return; }
     try {
-      await db.addQuote(mood, content, 'xiaopang');
+      await db.addQuote(mood, content, getIdentity());
       $('#new-quote-content').value = '';
       showToast('纸团已放入 🎁');
     } catch (e) {
@@ -731,15 +1527,29 @@
   }
 
   // ========== 初始化 ==========
-  function init() {
+  async function init() {
+    // 关键事件监听——必须绑定，不能因后续报错丢失
+    $('#auth-submit').addEventListener('click', handleAuthSubmit);
+    $('#auth-password').addEventListener('keydown', function (e) { if (e.key === 'Enter') handleAuthSubmit(); });
+    $('#auth-menu-logout').addEventListener('click', handleLogout);
+    $('#identity-switch-btn').addEventListener('click', function () {
+      if (authUser) {
+        const code = mySpace?.invite_code || '无';
+        showToast(mySpace?.partner_id ? '已配对' : '邀请码: ' + code, 3000);
+      } else {
+        showAuthPage('login');
+      }
+    });
+
+    try {
     db.init();
-    updateIdentityUI();
+    await initAuth();
     setupTabs();
     setupSegments();
     setupNetworkDetection();
     setupLightbox();
     setupPhotoInput('#diary-photo-btn', '#diary-photo-input', '#diary-photo-preview', pendingDiaryPhotos);
-    setupPhotoInput('#timeline-photo-btn', '#timeline-photo-input', '#timeline-photo-preview', pendingTimelinePhotos);
+    setupTimelinePhoto();
 
     // 记录 Tab
     $('#diary-new-btn').addEventListener('click', () => openDiaryEditor(todayStr(), getIdentity()));
@@ -752,8 +1562,9 @@
     $('#quote-retry-btn').addEventListener('click', resetPaperBall);
 
     // 时间轴 Tab
-    $('#timeline-save-btn').addEventListener('click', saveTimelineMood);
+    $('#timeline-save-btn').addEventListener('click', saveTimelineEvent);
     $('#timeline-load-more').addEventListener('click', () => loadTimeline(false));
+    $('#timeline-sort-btn').addEventListener('click', toggleTimelineSort);
 
     // 悄悄话 Tab
     renderWhisperEmotionSelect();
@@ -761,34 +1572,175 @@
     $('#whisper-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') sendWhisper(); });
 
     // 我们 Tab
-    $('#partner-unlock-btn').addEventListener('click', unlockPartner);
-    $('#partner-password').addEventListener('keydown', function (e) { if (e.key === 'Enter') unlockPartner(); });
     renderPartnerMoodSelect();
     $('#add-quote-btn').addEventListener('click', handleAddQuote);
+    $('#partner-search-btn').addEventListener('click', searchPartner);
+    $('#partner-search-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') searchPartner(); });
+    $('#partner-send-request-btn').addEventListener('click', sendRelationshipRequest);
+    $('#copy-invite-btn').addEventListener('click', copyInviteCode);
+    $('#copy-invite-btn-paired').addEventListener('click', copyInviteCode);
 
-    // 身份切换
-    $('#identity-switch-btn').addEventListener('click', function () {
-      if (getIdentity() === 'xiaopang') {
-        setIdentity('feichun');
-        sessionStorage.removeItem('partner_unlocked');
-        showToast('已切回肥纯 🥰');
-        if (currentTab === 'partner') initPartnerTab();
-      } else {
-        showSwitchPasswordOverlay();
+    // 修改昵称
+    const saveNickname = async (inputId) => {
+      const input = $(inputId);
+      if (!input) return;
+      const newNickname = input.value.trim();
+      if (!newNickname) { showToast('请输入昵称'); return; }
+      try {
+        await db.updateProfile(authUser.id, { nickname: newNickname });
+        myProfile.nickname = newNickname;
+        showToast('昵称已保存');
+        input.value = '';
+        await initPartnerTab();
+      } catch (e) {
+        showToast('保存失败');
+      }
+    };
+    $('#my-nickname-save-btn')?.addEventListener('click', () => saveNickname('#my-nickname-input'));
+    $('#my-nickname-save-btn-unpaired')?.addEventListener('click', () => saveNickname('#my-nickname-input-unpaired'));
+
+    // 解除配对
+    $('#my-unpair-btn')?.addEventListener('click', async () => {
+      if (!confirm('确定要解除配对吗？解除后双方数据将不再互通。')) return;
+      try {
+        await db.unpair(mySpace.id, authUser.id);
+        mySpace = null;
+        partnerProfile = null;
+        showToast('已解除配对');
+        await initPartnerTab();
+      } catch (e) {
+        showToast('解除配对失败');
       }
     });
-    $('#switch-cancel-btn').addEventListener('click', hideSwitchPasswordOverlay);
-    $('#switch-confirm-btn').addEventListener('click', confirmSwitch);
-    $('#switch-password-input').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') confirmSwitch();
-    });
-    $('#switch-password-overlay').addEventListener('click', function (e) {
-      if (e.target === this) hideSwitchPasswordOverlay();
+
+    // 退出登录
+    $('#my-logout-btn')?.addEventListener('click', async () => {
+      if (!confirm('确定要退出登录吗？')) return;
+      try {
+        await db.signOut();
+        showToast('已退出登录');
+      } catch (e) {
+        showToast('退出失败');
+      }
     });
 
-    // 启动
-    initRecordTab();
-    console.log('情绪盒子 5 Tab 双人互动版 已就绪');
+    // 头像选择
+    const handleAvatarChange = async (inputEl, avatarEl) => {
+      const file = inputEl.files?.[0];
+      if (!file) return;
+
+      console.log('[头像] 选择文件:', file.name, file.type, file.size);
+
+      // 验证文件类型
+      if (!file.type.startsWith('image/')) {
+        showToast('请选择图片文件');
+        return;
+      }
+
+      // 验证文件大小 (5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        showToast('图片不能超过 5MB');
+        return;
+      }
+
+      try {
+        showToast('正在上传头像...');
+
+        // 压缩图片 (maxWidth=400, maxHeight=400, quality=0.8)
+        console.log('[头像] 开始压缩图片...');
+        const compressed = await compressImage(file, 400, 400, 0.8);
+        console.log('[头像] 压缩完成:', compressed.name, compressed.type, compressed.size);
+
+        // 上传到 Supabase Storage
+        const timestamp = Date.now();
+        const userIdShort = authUser.id.substring(0, 8);
+        const fileName = `avatar-${userIdShort}-${timestamp}.jpg`;
+        console.log('[头像] 开始上传:', fileName);
+        const avatarUrl = await db.uploadAvatar(compressed, fileName);
+        console.log('[头像] 上传成功:', avatarUrl);
+
+        // 更新用户 profile
+        await db.updateProfile(authUser.id, { avatar_url: avatarUrl });
+        console.log('[头像] Profile 已更新');
+
+        // 更新 UI
+        if (avatarEl) {
+          avatarEl.style.backgroundImage = `url(${avatarUrl})`;
+          avatarEl.style.backgroundSize = 'cover';
+          avatarEl.style.backgroundPosition = 'center';
+          avatarEl.textContent = '';
+        }
+
+        // 更新全局 profile
+        if (myProfile) myProfile.avatar_url = avatarUrl;
+
+        showToast('头像已更新 ✨');
+      } catch (e) {
+        console.error('[头像] 上传失败:', e);
+        const errorMsg = e.message || e.error?.message || '未知错误';
+        showToast(`头像上传失败: ${errorMsg}`);
+      }
+    };
+
+    // 已配对头像
+    $('#my-avatar-paired')?.parentElement?.addEventListener('click', () => {
+      $('#avatar-input-paired').click();
+    });
+    $('#avatar-input-paired')?.addEventListener('change', function () {
+      handleAvatarChange(this, $('#my-avatar-paired'));
+    });
+
+    // 未配对头像
+    $('#my-avatar-unpaired')?.parentElement?.addEventListener('click', () => {
+      $('#avatar-input-unpaired').click();
+    });
+    $('#avatar-input-unpaired')?.addEventListener('change', function () {
+      handleAvatarChange(this, $('#my-avatar-unpaired'));
+    });
+
+    // 首页 → 去配对
+    $('#home-go-partner-btn').addEventListener('click', () => switchTab('partner'));
+
+    // 纪念日保存
+    $('#anniversary-save-btn').addEventListener('click', async () => {
+      const date = $('#anniversary-date-input').value;
+      if (!date) { showToast('请选择日期'); return; }
+      try {
+        await db.setAnniversary(mySpace.id, date);
+        mySpace.anniversary_date = date;
+        showToast('纪念日已保存');
+      } catch (e) {
+        showToast('保存失败');
+      }
+    });
+
+    // 登录页/空间 事件（次要）
+    $('#auth-menu-invite').addEventListener('click', function () {
+      if (mySpace?.invite_code) {
+        showToast('邀请码: ' + mySpace.invite_code + '  分享给对方即可加入', 4000);
+      }
+    });
+    $('#space-create-btn').addEventListener('click', handleCreateSpace);
+    $('#space-join-btn').addEventListener('click', handleJoinSpace);
+    $('#space-close').addEventListener('click', hideSpaceModal);
+    $('#space-modal').addEventListener('click', function (e) { if (e.target === this) hideSpaceModal(); });
+
+    // 未登录 → 显示登录页；已登录 → 显示应用
+    if (!authUser) {
+      showAuthPage('login');
+    } else {
+      hideAuthPage();
+    }
+
+    // 恢复上次 tab
+    const savedTab = sessionStorage.getItem('emoBox_tab') || 'home';
+    switchTab(savedTab);
+    console.log('Love Space 情绪盒子 已就绪');
+    } catch (e) {
+      console.error('初始化失败:', e);
+      // 兜底：至少显示登录页
+      $('#auth-page').classList.remove('hidden');
+    }
   }
 
   document.addEventListener('DOMContentLoaded', init);

@@ -1,6 +1,7 @@
 // supabase.js - Supabase 数据层
 const db = {
   client: null,
+  _userId: null,
 
   init() {
     this.client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -9,6 +10,9 @@ const db = {
   },
 
   isReady() { return true; },
+
+  setUserId(id) { this._userId = id; },
+  getUserId() { return this._userId; },
 
   // ====== 种子话语 ======
   async _seedQuotes() {
@@ -53,9 +57,7 @@ const db = {
       { mood: '疲惫', content: '好好好，又累，那就躺平一下啦，放慢一天两天又没事，总体方向是对的就行啊肥纯', author: 'xiaopang' }
     ];
 
-    await this.client.from('quotes').insert(
-      quotes.map(q => ({ ...q, used: false, created_at: new Date().toISOString() }))
-    );
+    // 种子话语已移除，每对情侣从零开始补充
   },
 
   // ==================== STORAGE ====================
@@ -69,6 +71,26 @@ const db = {
     if (error) throw error;
     const { data: urlData } = this.client.storage.from('photos').getPublicUrl(path);
     return { path, url: urlData.publicUrl };
+  },
+
+  // 上传头像
+  async uploadAvatar(file, fileName) {
+    console.log('[DB] 上传头像:', fileName);
+    // 直接上传到 photos bucket 根目录，不使用子文件夹
+    const { data, error } = await this.client.storage
+      .from('photos')
+      .upload(fileName, file, {
+        upsert: true,
+        contentType: 'image/jpeg'
+      });
+    if (error) {
+      console.error('[DB] 头像上传失败:', error);
+      throw error;
+    }
+    console.log('[DB] 头像上传成功:', data);
+    const { data: urlData } = this.client.storage.from('photos').getPublicUrl(fileName);
+    console.log('[DB] 获取URL:', urlData.publicUrl);
+    return urlData.publicUrl;
   },
 
   async deleteImages(paths) {
@@ -116,6 +138,7 @@ const db = {
       author: recordAuthor,
       done: done || false,
       images: recordImages,
+      user_id: this._userId,
       created_at: new Date().toISOString()
     };
     const { data } = await this.client
@@ -214,13 +237,11 @@ const db = {
 
   // ==================== QUOTES ====================
 
-  async getAvailableQuote(mood, drawnBy = 'feichun') {
-    const targetAuthor = drawnBy === 'feichun' ? 'xiaopang' : 'feichun';
+  async getAvailableQuote(mood) {
     const { data } = await this.client
       .from('quotes')
       .select('*')
       .eq('mood', mood)
-      .eq('author', targetAuthor)
       .eq('used', false);
     if (!data || data.length === 0) return null;
     return data[Math.floor(Math.random() * data.length)];
@@ -251,7 +272,7 @@ const db = {
   async addQuote(mood, content, author) {
     const { data } = await this.client
       .from('quotes')
-      .insert({ mood, content, author, used: false, created_at: new Date().toISOString() })
+      .insert({ mood, content, author, used: false, user_id: this._userId, created_at: new Date().toISOString() })
       .select()
       .single();
     return data;
@@ -275,7 +296,7 @@ const db = {
   async sendWhisper(sender, emotion, content) {
     const { data } = await this.client
       .from('whispers')
-      .insert({ sender, emotion, content, is_read: false, created_at: new Date().toISOString() })
+      .insert({ sender, emotion, content, is_read: false, user_id: this._userId, created_at: new Date().toISOString() })
       .select()
       .single();
     return data;
@@ -319,6 +340,64 @@ const db = {
     return { unsubscribe() { channel.unsubscribe(); } };
   },
 
+  // ==================== TIMELINE EVENTS ====================
+
+  async addTimelineEvent({ date, city, place, note, image, author }) {
+    const { data, error } = await this.client
+      .from('timeline_events')
+      .insert({
+        date,
+        city: city || '',
+        place: place || '',
+        note: note || '',
+        image: image || null,
+        author: author || 'feichun',
+        user_id: this._userId,
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
+  async getTimelineEvents(limit = 50, offset = 0) {
+    const { data, error } = await this.client
+      .from('timeline_events')
+      .select('*')
+      .order('date', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) throw error;
+    return data || [];
+  },
+
+  async getTimelineEventCount() {
+    const { count, error } = await this.client
+      .from('timeline_events')
+      .select('id', { count: 'exact', head: true });
+    if (error) throw error;
+    return count || 0;
+  },
+
+  async deleteTimelineEvent(id) {
+    const { error } = await this.client
+      .from('timeline_events')
+      .delete()
+      .eq('id', id);
+    if (error) throw error;
+  },
+
+  async updateTimelineEvent(id, updates) {
+    const { data, error } = await this.client
+      .from('timeline_events')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
   subscribeToWhispers(onInsert) {
     const channel = this.client
       .channel('whispers-changes')
@@ -329,5 +408,303 @@ const db = {
       )
       .subscribe();
     return { unsubscribe() { channel.unsubscribe(); } };
+  },
+
+  subscribeToTimelineEvents(onInsert) {
+    const channel = this.client
+      .channel('timeline-changes')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'timeline_events' },
+        payload => {
+          console.log('[Realtime] 收到 timeline_events 新事件:', payload.new);
+          onInsert(payload.new);
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('[Realtime] 时间轴订阅状态:', status);
+        if (err) console.error('[Realtime] 时间轴订阅错误:', err);
+      });
+    return { unsubscribe() { channel.unsubscribe(); } };
+  },
+
+  // ==================== AUTH ====================
+
+  async signUp(email, password) {
+    const { data, error } = await this.client.auth.signUp({ email, password });
+    if (error) throw error;
+    return data;
+  },
+
+  async signIn(email, password) {
+    const { data, error } = await this.client.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data;
+  },
+
+  async signOut() {
+    await this.client.auth.signOut();
+  },
+
+  async getUser() {
+    const { data } = await this.client.auth.getUser();
+    return data.user || null;
+  },
+
+  onAuthChange(cb) {
+    return this.client.auth.onAuthStateChange((event, session) => {
+      cb(event, session?.user || null);
+    });
+  },
+
+  // ==================== PROFILES ====================
+
+  async createProfile(userId, nickname) {
+    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const { data, error } = await this.client
+      .from('profiles')
+      .insert({ id: userId, nickname, invite_code: code })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
+  async getProfile(userId) {
+    const { data } = await this.client
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+    return data;
+  },
+
+  async updateProfile(userId, updates) {
+    const { data, error } = await this.client
+      .from('profiles')
+      .update(updates)
+      .eq('id', userId)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
+  // ==================== SPACE & RELATIONSHIP ====================
+
+  // 获取当前用户的邀请码，没有则自动生成
+  async getMyInviteCode(userId) {
+    const profile = await this.getProfile(userId);
+    if (!profile) throw new Error('账号信息未找到');
+    if (!profile.invite_code) {
+      const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+      await this.updateProfile(userId, { invite_code: code });
+      return code;
+    }
+    return profile.invite_code;
+  },
+
+  // 通过邀请码搜索用户
+  async searchByInviteCode(inviteCode) {
+    const { data, error } = await this.client
+      .from('profiles')
+      .select('id, nickname, invite_code')
+      .eq('invite_code', inviteCode.toUpperCase())
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('未找到该邀请码对应的用户');
+    return data;
+  },
+
+  // 发送恋爱请求
+  async sendRelationshipRequest(fromUserId, toUserId) {
+    if (fromUserId === toUserId) throw new Error('不能给自己发送请求');
+    const { data, error } = await this.client
+      .from('relationship_requests')
+      .insert({ from_user: fromUserId, to_user: toUserId, status: 'pending' })
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '23505') throw new Error('已发送过请求，请等待对方回应');
+      throw error;
+    }
+    return data;
+  },
+
+  // 获取发给我的待处理请求
+  async getPendingRequests(userId) {
+    const { data } = await this.client
+      .from('relationship_requests')
+      .select('id, from_user, status, created_at, profiles!relationship_requests_from_user_fkey(nickname)')
+      .eq('to_user', userId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+    return data || [];
+  },
+
+  // 同意请求 — 自动创建空间
+  async acceptRequest(requestId, userId) {
+    // 1. 获取请求详情
+    const { data: req } = await this.client
+      .from('relationship_requests')
+      .select('*')
+      .eq('id', requestId)
+      .eq('to_user', userId)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (!req) throw new Error('请求不存在或已处理');
+
+    // 2. 创建情侣空间
+    const { data: space, error: spaceErr } = await this.client
+      .from('couple_spaces')
+      .insert({ owner_id: req.from_user, partner_id: userId })
+      .select()
+      .single();
+    if (spaceErr) throw spaceErr;
+
+    // 3. 更新双方 profiles
+    await this.updateProfile(req.from_user, { space_id: space.id });
+    await this.updateProfile(userId, { space_id: space.id });
+
+    // 4. 更新请求状态
+    await this.client
+      .from('relationship_requests')
+      .update({ status: 'accepted', resolved_at: new Date().toISOString() })
+      .eq('id', requestId);
+
+    return space;
+  },
+
+  // 拒绝请求
+  async rejectRequest(requestId, userId) {
+    const { error } = await this.client
+      .from('relationship_requests')
+      .update({ status: 'rejected', resolved_at: new Date().toISOString() })
+      .eq('id', requestId)
+      .eq('to_user', userId)
+      .eq('status', 'pending');
+    if (error) throw error;
+  },
+
+  // 获取我发出的请求状态
+  async getMySentRequests(userId) {
+    const { data } = await this.client
+      .from('relationship_requests')
+      .select('id, to_user, status, created_at, profiles!relationship_requests_to_user_fkey(nickname)')
+      .eq('from_user', userId)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    return data || [];
+  },
+
+  // 订阅发给我的恋爱请求（实时通知）
+  subscribeToRelationshipRequests(userId, onInsert) {
+    const channel = this.client
+      .channel('rr-changes')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'relationship_requests', filter: `to_user=eq.${userId}` },
+        payload => onInsert(payload.new)
+      )
+      .subscribe();
+    return { unsubscribe() { channel.unsubscribe(); } };
+  },
+
+  // 设置纪念日
+  async setAnniversary(spaceId, date) {
+    const { error } = await this.client
+      .from('couple_spaces')
+      .update({ anniversary_date: date })
+      .eq('id', spaceId);
+    if (error) throw error;
+  },
+
+  // ====== 保留旧方法兼容 ======
+
+  async createSpace(ownerId, nickname) {
+    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const { data: space, error: spaceErr } = await this.client
+      .from('couple_spaces')
+      .insert({ owner_id: ownerId, invite_code: code })
+      .select()
+      .single();
+    if (spaceErr) throw spaceErr;
+
+    await this.updateProfile(ownerId, { nickname, space_id: space.id, invite_code: code });
+    return space;
+  },
+
+  async joinSpace(userId, inviteCode) {
+    const { data: space, error: findErr } = await this.client
+      .from('couple_spaces')
+      .select('*')
+      .eq('invite_code', inviteCode.toUpperCase())
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!space) throw new Error('邀请码无效');
+    if (space.partner_id) throw new Error('该空间已有两个人');
+
+    const profile = await this.getProfile(userId);
+    if (profile?.space_id && profile.space_id !== space.id) {
+      await this.client.from('couple_spaces').delete().eq('id', profile.space_id);
+    }
+
+    const { error: joinErr } = await this.client
+      .from('couple_spaces')
+      .update({ partner_id: userId })
+      .eq('id', space.id);
+    if (joinErr) throw joinErr;
+
+    await this.updateProfile(userId, { space_id: space.id });
+    return space;
+  },
+
+  async getSpace(spaceId) {
+    const { data } = await this.client
+      .from('couple_spaces')
+      .select('*')
+      .eq('id', spaceId)
+      .maybeSingle();
+    return data;
+  },
+
+  // 解除配对
+  async unpair(spaceId, userId) {
+    // 1. 获取空间信息
+    const space = await this.getSpace(spaceId);
+    if (!space) throw new Error('空间不存在');
+
+    // 2. 更新双方 profiles 的 space_id 为 null
+    const partnerId = space.owner_id === userId ? space.partner_id : space.owner_id;
+    await this.updateProfile(userId, { space_id: null });
+    if (partnerId) {
+      await this.updateProfile(partnerId, { space_id: null });
+    }
+
+    // 3. 删除情侣空间
+    await this.client
+      .from('couple_spaces')
+      .delete()
+      .eq('id', spaceId);
+
+    return true;
+  },
+
+  async getPartnerProfile(spaceId, myUserId) {
+    if (!spaceId) return null;
+    const { data: space } = await this.client
+      .from('couple_spaces')
+      .select('*')
+      .eq('id', spaceId)
+      .maybeSingle();
+    if (!space) return null;
+    const partnerId = space.owner_id === myUserId ? space.partner_id : space.owner_id;
+    if (!partnerId) return null;
+    const { data } = await this.client
+      .from('profiles')
+      .select('*')
+      .eq('id', partnerId)
+      .maybeSingle();
+    return data;
   }
 };
