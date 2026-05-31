@@ -2664,6 +2664,15 @@ input, textarea {
   gap: 8px;
 }
 
+.my-version {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--color-text-light);
+  opacity: 0.6;
+  padding: 8px 0 4px;
+  letter-spacing: 1px;
+}
+
 .my-date-input,
 .my-nickname-input,
 .my-search-input {
