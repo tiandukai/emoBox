@@ -238,33 +238,49 @@ const db = {
   // ==================== QUOTES ====================
 
   async getAvailableQuote(mood) {
+    // 排除自己写的（只看对方写的）+ 排除自己已拆过的
     const { data } = await this.client
       .from('quotes')
       .select('*')
       .eq('mood', mood)
-      .eq('used', false);
+      .eq('used', false)
+      .neq('user_id', this._userId)
+      .not('used_by', 'cs', `{${this._userId}}`);
     if (!data || data.length === 0) return null;
     return data[Math.floor(Math.random() * data.length)];
   },
 
   async markQuoteUsed(id) {
+    // 把当前用户加入 used_by 数组（不改全局 used 标记）
+    const { data: quote } = await this.client
+      .from('quotes')
+      .select('used_by')
+      .eq('id', id)
+      .single();
+    const current = quote?.used_by || [];
+    if (!current.includes(this._userId)) {
+      current.push(this._userId);
+    }
     await this.client
       .from('quotes')
-      .update({ used: true, used_at: new Date().toISOString() })
+      .update({ used_by: current, used_at: new Date().toISOString() })
       .eq('id', id);
   },
 
   async getQuoteInventory() {
+    // 只统计对方写的纸团（排除自己写的）
     const { data } = await this.client
       .from('quotes')
-      .select('mood, used, author');
+      .select('mood, used, used_by, author, user_id');
     if (!data) return {};
     const inventory = {};
     data.forEach(q => {
-      const key = `${q.author}_${q.mood}`;
-      if (!inventory[key]) inventory[key] = { author: q.author, mood: q.mood, total: 0, remaining: 0 };
-      inventory[key].total++;
-      if (!q.used) inventory[key].remaining++;
+      // 跳过自己写的
+      if (q.user_id === this._userId) return;
+      const openedByMe = (q.used_by || []).includes(this._userId);
+      if (!inventory[q.mood]) inventory[q.mood] = { mood: q.mood, total: 0, remaining: 0 };
+      inventory[q.mood].total++;
+      if (!openedByMe) inventory[q.mood].remaining++;
     });
     return inventory;
   },
@@ -272,7 +288,7 @@ const db = {
   async addQuote(mood, content, author) {
     const { data } = await this.client
       .from('quotes')
-      .insert({ mood, content, author, used: false, user_id: this._userId, created_at: new Date().toISOString() })
+      .insert({ mood, content, author, used: false, used_by: [], user_id: this._userId, created_at: new Date().toISOString() })
       .select()
       .single();
     return data;

@@ -1175,12 +1175,25 @@
       const emotionEmoji = EMOTIONS.find(e => e.name === w.emotion)?.emoji || '💬';
       const isSent = w.sender === (myProfile?.nickname || '');
       const senderLabel = isSent ? '' : `<div class="whisper-bubble-sender">${escapeHtml(partnerProfile?.nickname || 'TA')}</div>`;
+
+      // 头像：收到的消息显示对方头像，发出的显示自己头像
+      const avatarProfile = isSent ? myProfile : partnerProfile;
+      const avatarUrl = avatarProfile?.avatar_url;
+      const avatarFallback = isSent ? '😊' : '💕';
+      const avatarHtml = avatarUrl
+        ? `<div class="whisper-avatar" style="background-image:url(${avatarUrl})"></div>`
+        : `<div class="whisper-avatar whisper-avatar-emoji">${avatarFallback}</div>`;
+
       html += `
-        <div class="whisper-bubble ${isSent ? 'sent' : 'received'}">
-          ${senderLabel}
-          <div class="whisper-bubble-emotion">${emotionEmoji}</div>
-          <div>${escapeHtml(w.content)}</div>
-          <div class="whisper-bubble-time">${formatTime(w.created_at)}</div>
+        <div class="whisper-row ${isSent ? 'sent' : 'received'}">
+          ${isSent ? '' : avatarHtml}
+          <div class="whisper-bubble">
+            ${senderLabel}
+            <div class="whisper-bubble-emotion">${emotionEmoji}</div>
+            <div>${escapeHtml(w.content)}</div>
+            <div class="whisper-bubble-time">${formatTime(w.created_at)}</div>
+          </div>
+          ${isSent ? avatarHtml : ''}
         </div>
       `;
     });
