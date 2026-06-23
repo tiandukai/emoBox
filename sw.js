@@ -1,5 +1,5 @@
 // sw.js - Service Worker for 情绪盒子 PWA
-const CACHE_NAME = 'emobox-v3';
+const CACHE_NAME = 'emobox-v4';
 const STATIC_ASSETS = [
   './',
   './index.html',

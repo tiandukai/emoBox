@@ -243,11 +243,13 @@ const db = {
       .from('quotes')
       .select('*')
       .eq('mood', mood)
-      .eq('used', false)
-      .not('used_by', 'cs', `{${this._userId}}`);
+      .eq('used', false);
     if (!data || data.length === 0) return null;
-    // JS层过滤：排除自己写的，但保留种子数据(user_id=null)
-    const available = data.filter(q => q.user_id !== this._userId);
+    // 全部在JS层过滤：排除自己写的 + 排除自己拆过的
+    const available = data.filter(q =>
+      q.user_id !== this._userId &&
+      !(q.used_by || []).includes(this._userId)
+    );
     if (available.length === 0) return null;
     return available[Math.floor(Math.random() * available.length)];
   },
