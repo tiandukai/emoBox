@@ -847,7 +847,7 @@
     const container = $('#timeline-container');
     if (reset) container.innerHTML = '';
 
-    const monthKeys = timelineSortAsc ? [...grouped.keys()] : [...grouped.keys()].reverse();
+    const monthKeys = [...grouped.keys()];
 
     monthKeys.forEach(month => {
       // 月份标签
@@ -857,7 +857,7 @@
       container.appendChild(label);
 
       const events = grouped.get(month);
-      (timelineSortAsc ? events : [...events].reverse()).forEach(e => {
+      events.forEach(e => {
         const d = new Date(e.date);
         const dateStr = `${d.getMonth() + 1}月${d.getDate()}日`;
         const locationStr = [e.city, e.place].filter(Boolean).join(' · ');
