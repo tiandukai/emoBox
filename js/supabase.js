@@ -238,32 +238,33 @@ const db = {
   // ==================== QUOTES ====================
 
   async getAvailableQuote(mood) {
-    if (!this._userId) return null;
+    const userId = await this._getUserId();
+    if (!userId) return null;
     const { data } = await this.client
       .from('quotes')
       .select('*')
       .eq('mood', mood)
       .eq('used', false);
     if (!data || data.length === 0) return null;
-    // 全部在JS层过滤：排除自己写的 + 排除自己拆过的
     const available = data.filter(q =>
-      q.user_id !== this._userId &&
-      !(q.used_by || []).includes(this._userId)
+      q.user_id !== userId &&
+      !(q.used_by || []).includes(userId)
     );
     if (available.length === 0) return null;
     return available[Math.floor(Math.random() * available.length)];
   },
 
   async markQuoteUsed(id) {
-    // 把当前用户加入 used_by 数组（不改全局 used 标记）
+    const userId = await this._getUserId();
+    if (!userId) return;
     const { data: quote } = await this.client
       .from('quotes')
       .select('used_by')
       .eq('id', id)
       .single();
     const current = quote?.used_by || [];
-    if (!current.includes(this._userId)) {
-      current.push(this._userId);
+    if (!current.includes(userId)) {
+      current.push(userId);
     }
     await this.client
       .from('quotes')
@@ -272,16 +273,15 @@ const db = {
   },
 
   async getQuoteInventory() {
-    // 只统计对方写的纸团（排除自己写的）
+    const userId = await this._getUserId();
     const { data } = await this.client
       .from('quotes')
       .select('mood, used, used_by, author, user_id');
     if (!data) return {};
     const inventory = {};
     data.forEach(q => {
-      // 跳过自己写的
-      if (q.user_id === this._userId) return;
-      const openedByMe = (q.used_by || []).includes(this._userId);
+      if (q.user_id === userId) return;
+      const openedByMe = (q.used_by || []).includes(userId);
       if (!inventory[q.mood]) inventory[q.mood] = { mood: q.mood, total: 0, remaining: 0 };
       inventory[q.mood].total++;
       if (!openedByMe) inventory[q.mood].remaining++;
@@ -289,10 +289,19 @@ const db = {
     return inventory;
   },
 
+  async _getUserId() {
+    if (this._userId) return this._userId;
+    const { data } = await this.client.auth.getUser();
+    const id = data?.user?.id || null;
+    if (id) this._userId = id;
+    return id;
+  },
+
   async addQuote(mood, content, author) {
+    const userId = await this._getUserId();
     const { data } = await this.client
       .from('quotes')
-      .insert({ mood, content, author, used: false, used_by: [], user_id: this._userId, created_at: new Date().toISOString() })
+      .insert({ mood, content, author, used: false, used_by: [], user_id: userId, created_at: new Date().toISOString() })
       .select()
       .single();
     return data;
