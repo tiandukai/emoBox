@@ -4,8 +4,8 @@
   "description": "情侣私密空间",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#FFF5EE",
-  "theme_color": "#FFF5EE",
+  "background_color": "#FAF6F0",
+  "theme_color": "#FAF6F0",
   "orientation": "portrait",
   "icons": [
     {

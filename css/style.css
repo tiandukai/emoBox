@@ -5,31 +5,31 @@
 
 /* ========== CSS 变量 ========== */
 :root {
-  /* 纸品色调 */
-  --color-paper: #FBF7F0;
-  --color-paper-warm: #F5EDE0;
-  --color-kraft: #C4A882;
-  --color-kraft-light: #DBC9AE;
-  --color-ink: #2C3E50;
-  --color-ink-light: #5D6D7E;
-  --color-ink-muted: #95A5A6;
-  --color-stamp: #E85D75;
-  --color-stamp-light: #F8B0BD;
-  --color-washi-mint: rgba(168, 216, 185, 0.55);
-  --color-washi-lavender: rgba(195, 174, 214, 0.55);
-  --color-washi-sunny: rgba(244, 208, 63, 0.55);
-  --color-washi-coral: rgba(232, 93, 117, 0.35);
+  /* 纸品色调 — 深咖啡 */
+  --color-paper: #FAF6F0;
+  --color-paper-warm: #F0E8DC;
+  --color-kraft: #8D6E63;
+  --color-kraft-light: #A1887F;
+  --color-ink: #3E2723;
+  --color-ink-light: #6D4C41;
+  --color-ink-muted: #8D6E63;
+  --color-stamp: #6D4C41;
+  --color-stamp-light: #A1887F;
+  --color-washi-mint: rgba(144, 164, 150, 0.55);
+  --color-washi-lavender: rgba(161, 136, 127, 0.55);
+  --color-washi-sunny: rgba(212, 178, 140, 0.55);
+  --color-washi-coral: rgba(109, 76, 65, 0.35);
 
   /* 兼容旧变量 */
-  --color-bg-start: #FBF7F0;
-  --color-bg-end: #F5EDE0;
-  --color-card-bg: rgba(255, 255, 252, 0.9);
-  --color-card-bg-solid: rgba(255, 255, 252, 0.95);
-  --color-text: #2C3E50;
-  --color-text-secondary: #5D6D7E;
-  --color-text-light: #A0AAB4;
-  --color-primary: #E85D75;
-  --color-feichun: #E85D75;
+  --color-bg-start: #FAF6F0;
+  --color-bg-end: #F0E8DC;
+  --color-card-bg: rgba(255, 252, 248, 0.9);
+  --color-card-bg-solid: rgba(255, 252, 248, 0.95);
+  --color-text: #3E2723;
+  --color-text-secondary: #6D4C41;
+  --color-text-light: #8D6E63;
+  --color-primary: #6D4C41;
+  --color-feichun: #6D4C41;
   --color-xiaopang: #5DADE2;
   --color-shadow: rgba(60, 50, 40, 0.06);
   --color-shadow-md: rgba(60, 50, 40, 0.10);
@@ -385,7 +385,7 @@ body {
 }
 
 .auth-error {
-  color: #E85D75;
+  color: #6D4C41;
   font-size: 0.8rem;
   font-weight: 600;
   margin: 4px 0 8px;
@@ -1151,13 +1151,13 @@ body {
 .timeline-sort-btn {
   flex-shrink: 0;
   padding: 7px 15px;
-  border: 1.5px solid #F8B0BD;
+  border: 1.5px solid #A1887F;
   border-radius: 20px;
   background: #FFF;
   font-family: inherit;
   font-size: 0.8rem;
   font-weight: 500;
-  color: #E85D75;
+  color: #6D4C41;
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
@@ -1177,7 +1177,7 @@ body {
   margin-bottom: 22px;
   box-shadow: 0 2px 16px rgba(232, 93, 117, 0.06), 0 1px 4px rgba(0,0,0,0.04);
   border: 1px solid rgba(248, 176, 189, 0.4);
-  border-top: 3px solid #F8B0BD;
+  border-top: 3px solid #A1887F;
   animation: cardSlideIn 0.35s ease;
 }
 
@@ -1208,7 +1208,7 @@ body {
 .timeline-date-input:focus,
 .timeline-city-input:focus,
 .timeline-place-input:focus {
-  border-color: #F8B0BD;
+  border-color: #A1887F;
   box-shadow: 0 0 0 3px rgba(248, 176, 189, 0.1);
   background: #FFF;
 }
@@ -1245,7 +1245,7 @@ body {
 }
 
 .timeline-note-input:focus {
-  border-color: #F8B0BD;
+  border-color: #A1887F;
   box-shadow: 0 0 0 3px rgba(248, 176, 189, 0.1);
   background: #FFF;
 }
@@ -1280,10 +1280,10 @@ body {
   bottom: 8px;
   width: 2px;
   background: linear-gradient(to bottom,
-    #F8B0BD 0%,
+    #A1887F 0%,
     #E0E0E0 15%,
     #E0E0E0 85%,
-    #F8B0BD 100%
+    #A1887F 100%
   );
   border-radius: 1px;
 }
@@ -1296,8 +1296,8 @@ body {
   margin: 10px 0 16px;
   font-size: 0.82rem;
   font-weight: 700;
-  color: #E85D75;
-  border: 1.5px solid #F8B0BD;
+  color: #6D4C41;
+  border: 1.5px solid #A1887F;
   border-radius: 20px;
   background: linear-gradient(135deg, #FFF, #FFFEFC);
   box-shadow: 0 1px 4px rgba(232, 93, 117, 0.06);
@@ -1325,7 +1325,7 @@ body {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #F8B0BD, #F8B0BD);
+  background: linear-gradient(135deg, #A1887F, #A1887F);
   border: 2.5px solid #FFF;
   box-shadow: 0 0 0 3px rgba(248, 176, 189, 0.3), 0 2px 6px rgba(232, 93, 117, 0.15);
   z-index: 1;
@@ -1358,7 +1358,7 @@ body {
   top: 0;
   bottom: 0;
   width: 3px;
-  background: linear-gradient(to bottom, #E85D75, #F8B0BD);
+  background: linear-gradient(to bottom, #6D4C41, #A1887F);
   border-radius: 3px 0 0 3px;
 }
 
@@ -1370,7 +1370,7 @@ body {
 .timeline-event-date {
   font-size: 0.75rem;
   font-weight: 700;
-  color: #E85D75;
+  color: #6D4C41;
   margin-bottom: 6px;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -1465,7 +1465,7 @@ body {
 .tl-edit-field input:focus,
 .tl-edit-field textarea:focus {
   outline: none;
-  border-color: #E85D75;
+  border-color: #6D4C41;
   box-shadow: 0 0 0 2px rgba(232,93,117,0.15);
 }
 
@@ -1499,7 +1499,7 @@ body {
   padding: 7px 18px;
   border: none;
   border-radius: 8px;
-  background: #E85D75;
+  background: #6D4C41;
   color: #FFF;
   font-size: 0.85rem;
   font-weight: 600;
@@ -1572,7 +1572,7 @@ body {
   height: 54px;
   border-radius: 50%;
   border: none;
-  background: linear-gradient(135deg, #E85D75, #F8B0BD);
+  background: linear-gradient(135deg, #6D4C41, #A1887F);
   color: #FFF;
   font-size: 1.6rem;
   font-weight: 300;
@@ -1692,7 +1692,7 @@ body {
 .whisper-bubble-sender {
   font-size: 0.7rem;
   font-weight: 700;
-  color: #E85D75;
+  color: #6D4C41;
   margin-bottom: 4px;
 }
 
@@ -2694,7 +2694,7 @@ input, textarea {
 
 .my-avatar-hint {
   font-size: 0.65rem;
-  color: #E85D75;
+  color: #6D4C41;
   margin: 4px 0 0;
   opacity: 0.8;
 }
