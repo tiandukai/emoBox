@@ -379,7 +379,8 @@ const db = {
 
   // ==================== TIMELINE EVENTS ====================
 
-  async addTimelineEvent({ date, city, place, note, image, author }) {
+  async addTimelineEvent({ date, city, place, note, image, images, author }) {
+    const allImages = images && images.length > 0 ? images : (image ? [image] : []);
     const { data, error } = await this.client
       .from('timeline_events')
       .insert({
@@ -387,7 +388,8 @@ const db = {
         city: city || '',
         place: place || '',
         note: note || '',
-        image: image || null,
+        image: allImages[0] || null,
+        images: allImages,
         author: author || 'feichun',
         user_id: this._userId,
         created_at: new Date().toISOString()

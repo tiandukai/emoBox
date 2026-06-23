@@ -732,8 +732,6 @@
 
   // ==================== 时间轴 Tab ====================
   let timelineSortAsc = false;
-  let pendingTimelinePhoto = null;
-
   function compressImage(file, maxWidth = 1200, maxHeight = 1200, quality = 0.75) {
     return new Promise((resolve) => {
       if (!file.type.startsWith('image/')) { resolve(file); return; }
@@ -794,7 +792,7 @@
     timelineOffset = 0;
     const dateInput = $('#timeline-date-input');
     if (!dateInput.value) dateInput.value = todayStr();
-    pendingTimelinePhoto = null;
+    pendingTimelinePhotos.length = 0;
     $('#timeline-photo-preview').innerHTML = '';
     setupTimelineRealtime();
     await loadTimeline(true);
@@ -866,11 +864,7 @@
         wrapper.className = 'timeline-event';
         wrapper.dataset.id = e.id;
 
-        let imageHtml = '';
-        if (e.image) {
-          imageHtml = `<img src="${e.image}" alt="" class="timeline-event-image" loading="lazy"
-            onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${e.image}'">`;
-        }
+        const imageHtml = renderTimelineImages(getTimelineImages(e));
 
         let noteHtml = '';
         if (e.note) {
@@ -893,7 +887,7 @@
             </div>
             ${noteHtml}
             ${locationHtml}
-            ${e.image ? imageHtml : ''}
+            ${imageHtml}
           </div>
         `;
         container.appendChild(wrapper);
@@ -927,15 +921,26 @@
     } catch (e) { /* ignore */ }
   }
 
+  function renderTimelineImages(urls) {
+    if (!urls || urls.length === 0) return '';
+    return urls.map(url =>
+      `<img src="${url}" alt="" class="timeline-event-image" loading="lazy"
+        onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${url}'">`
+    ).join('');
+  }
+
+  function getTimelineImages(e) {
+    if (e.images && Array.isArray(e.images) && e.images.length > 0) return e.images;
+    if (e.image) return [e.image];
+    return [];
+  }
+
   function buildTimelineCardHTML({ date, city, place, note, imageUrl, previewUrl }) {
     const d = new Date(date);
     const dateStr = `${d.getMonth() + 1}月${d.getDate()}日`;
     const locationStr = [city, place].filter(Boolean).join(' · ');
-    let imageHtml = '';
-    if (imageUrl || previewUrl) {
-      const src = previewUrl || imageUrl;
-      imageHtml = `<img src="${src}" alt="" class="timeline-event-image" loading="lazy">`;
-    }
+    const srcs = imageUrl ? [imageUrl] : (previewUrl ? [previewUrl] : []);
+    const imageHtml = renderTimelineImages(srcs);
     let noteHtml = '';
     if (note) { noteHtml = `<div class="timeline-event-note">${escapeHtml(note)}</div>`; }
     let locationHtml = '';
@@ -986,8 +991,8 @@
     if (!note && !city && !place) { showToast('请至少填写事情描述或地点'); return; }
 
     const tempId = 'pending_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    const photo = pendingTimelinePhoto;
-    const previewUrl = photo ? URL.createObjectURL(photo) : null;
+    const photos = [...pendingTimelinePhotos];
+    const previewUrl = photos.length > 0 ? URL.createObjectURL(photos[0]) : null;
 
     // 乐观插入 DOM
     const wrapper = document.createElement('div');
@@ -1000,7 +1005,7 @@
     cityInput.value = '';
     placeInput.value = '';
     noteInput.value = '';
-    pendingTimelinePhoto = null;
+    pendingTimelinePhotos.length = 0;
     $('#timeline-photo-preview').innerHTML = '';
 
     playPaperPlane();
@@ -1008,16 +1013,20 @@
 
     // 后台异步保存
     try {
-      let imageUrl = null;
-      if (photo) {
-        const compressed = await compressImage(photo);
-        const uploadResult = await db.uploadImage(compressed);
-        imageUrl = uploadResult.url;
+      let imageUrls = [];
+      for (const f of photos) {
+        try {
+          const compressed = await compressImage(f);
+          const uploadResult = await db.uploadImage(compressed);
+          imageUrls.push(uploadResult.url);
+        } catch (e) {
+          console.error('[时间轴] 图片上传失败:', e);
+        }
       }
 
       const saved = await db.addTimelineEvent({
         date, city, place, note,
-        image: imageUrl,
+        images: imageUrls,
         author: getIdentity()
       });
 
@@ -1034,9 +1043,18 @@
           btn.addEventListener('click', function () { deleteTimelineEvent(this.dataset.id); });
           statusEl.replaceWith(btn);
         }
-        if (imageUrl && previewUrl && imageUrl !== previewUrl) {
-          const img = el.querySelector('.timeline-event-image');
-          if (img) img.src = imageUrl;
+        // 替换占位预览图为真实图片
+        const existingImgs = el.querySelectorAll('.timeline-event-image');
+        existingImgs.forEach(img => img.remove());
+        if (imageUrls.length > 0) {
+          const imgContainer = el.querySelector('.timeline-event-card');
+          if (imgContainer) {
+            const imgsHtml = imageUrls.map(url =>
+              `<img src="${url}" alt="" class="timeline-event-image" loading="lazy"
+                onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${url}'">`
+            ).join('');
+            imgContainer.insertAdjacentHTML('beforeend', imgsHtml);
+          }
         }
         updateTimelineCount();
       }
@@ -1126,31 +1144,11 @@
     });
   }
 
-  // 时间轴照片选择
+  // 时间轴照片选择（多图）
   function setupTimelinePhoto() {
-    const btn = $('#timeline-photo-btn');
-    const input = $('#timeline-photo-input');
-    const preview = $('#timeline-photo-preview');
-
-    btn.addEventListener('click', () => input.click());
-
-    input.addEventListener('change', () => {
-      if (input.files.length > 0) {
-        pendingTimelinePhoto = input.files[0];
-        const url = URL.createObjectURL(pendingTimelinePhoto);
-        preview.innerHTML = `<div class="photo-thumb">
-          <img src="${url}" alt="">
-          <button class="photo-thumb-remove" id="timeline-photo-remove">✕</button>
-        </div>`;
-        $('#timeline-photo-remove').addEventListener('click', (e) => {
-          e.stopPropagation();
-          pendingTimelinePhoto = null;
-          preview.innerHTML = '';
-          input.value = '';
-        });
-        input.value = '';
-      }
-    });
+    setupPhotoInput('#timeline-photo-btn', '#timeline-photo-input', '#timeline-photo-preview', pendingTimelinePhotos);
+    // 给 input 添加 multiple 属性
+    $('#timeline-photo-input').setAttribute('multiple', '');
   }
 
   // ==================== 悄悄话 Tab ====================
@@ -1264,7 +1262,7 @@
         </div>
         ${eventData.note ? `<div class="timeline-event-note">${escapeHtml(eventData.note)}</div>` : ''}
         ${locationStr ? `<div class="timeline-event-location">${escapeHtml(locationStr)}</div>` : ''}
-        ${eventData.image ? `<img src="${eventData.image}" alt="" class="timeline-event-image" loading="lazy" onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${eventData.image}'">` : ''}
+        ${renderTimelineImages(getTimelineImages(eventData))}
       </div>
     `;
 
