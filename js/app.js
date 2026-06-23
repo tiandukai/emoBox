@@ -20,6 +20,8 @@
   let diarySaveTimer = null;
   let timelineOffset = 0;
   const TIMELINE_PAGE = 20;
+  let whisperOffset = 0;
+  const WHISPER_PAGE = 20;
   let pendingDiaryPhotos = [];
   let pendingTimelinePhotos = [];
 
@@ -673,14 +675,20 @@
     resetPaperBall();
   }
 
-  function renderQuoteEmotionTabs() {
+  async function renderQuoteEmotionTabs() {
     const container = $('#quote-emotion-tabs');
-    container.innerHTML = EMOTIONS.map((e, i) => `
-      <button class="quote-emo-btn ${quoteEmotionIndex === i ? 'active' : ''}"
-              data-index="${i}" style="--emo-color: ${e.color}">
-        ${e.emoji} ${e.name}
-      </button>
-    `).join('');
+    let inventory = {};
+    try { inventory = await db.getQuoteInventory(); } catch (e) { /* 静默 */ }
+    container.innerHTML = EMOTIONS.map((e, i) => {
+      const inv = inventory[e.name] || { remaining: 0, total: 0 };
+      return `
+        <button class="quote-emo-btn ${quoteEmotionIndex === i ? 'active' : ''}"
+                data-index="${i}" style="--emo-color: ${e.color}">
+          ${e.emoji} ${e.name}
+          <span class="quote-count">${inv.remaining}/${inv.total}</span>
+        </button>
+      `;
+    }).join('');
 
     container.querySelectorAll('.quote-emo-btn').forEach(btn => {
       btn.addEventListener('click', function () {
@@ -718,6 +726,7 @@
       $('#paper-content').textContent = quote.content;
       result.classList.add('reveal');
       await db.markQuoteUsed(quote.id);
+      renderQuoteEmotionTabs();
     }, 600);
   }
 
@@ -796,7 +805,7 @@
   function toggleTimelineSort() {
     timelineSortAsc = !timelineSortAsc;
     const btn = $('#timeline-sort-btn');
-    btn.textContent = timelineSortAsc ? '最新在前' : '最早在前';
+    btn.textContent = timelineSortAsc ? '最早在前' : '最新在前';
     loadTimeline(true);
   }
 
@@ -808,7 +817,7 @@
 
     let events;
     try {
-      events = await db.getTimelineEvents(TIMELINE_PAGE, timelineOffset);
+      events = await db.getTimelineEvents(TIMELINE_PAGE, timelineOffset, timelineSortAsc);
     } catch (e) {
       console.error('[时间轴] 加载失败:', e);
       showToast('加载失败: ' + (e.message || '未知错误'));
@@ -818,8 +827,7 @@
       return;
     }
 
-    // 如果默认降序，需要在前端反转（数据库始终按 date DESC 查，再反转）
-    const sorted = timelineSortAsc ? [...events].reverse() : events;
+    const sorted = events;
 
     if (sorted.length === 0 && reset) {
       $('#timeline-container').innerHTML = '<p class="timeline-empty">还没有共同回忆，来记录第一条吧</p>';
@@ -908,8 +916,8 @@
       $('#timeline-load-more').classList.add('hidden');
     }
 
-    // 更新计数
-    updateTimelineCount();
+    // 更新计数（仅首次加载时查询数据库）
+    if (reset) updateTimelineCount();
   }
 
   async function updateTimelineCount() {
@@ -1151,15 +1159,40 @@
   let rrSub = null;
 
   async function initWhispersTab() {
-    await loadWhispers();
+    whisperOffset = 0;
+    await loadWhispers(true);
     setupWhisperRealtime();
   }
 
-  async function loadWhispers() {
-    const list = $('#whisper-list');
-    const whispers = await db.getWhispers(50);
+  function buildWhisperHTML(w) {
+    const emotionEmoji = EMOTIONS.find(e => e.name === w.emotion)?.emoji || '💬';
+    const isSent = w.user_id === getUserId();
+    const senderLabel = isSent ? '' : `<div class="whisper-bubble-sender">${escapeHtml(partnerProfile?.nickname || 'TA')}</div>`;
+    const avatarProfile = isSent ? myProfile : partnerProfile;
+    const avatarUrl = avatarProfile?.avatar_url;
+    const avatarFallback = isSent ? '😊' : '💕';
+    const avatarHtml = avatarUrl
+      ? `<div class="whisper-avatar" style="background-image:url(${avatarUrl})"></div>`
+      : `<div class="whisper-avatar whisper-avatar-emoji">${avatarFallback}</div>`;
+    return `
+      <div class="whisper-row ${isSent ? 'sent' : 'received'}">
+        ${isSent ? '' : avatarHtml}
+        <div class="whisper-bubble">
+          ${senderLabel}
+          <div class="whisper-bubble-emotion">${emotionEmoji}</div>
+          <div>${escapeHtml(w.content)}</div>
+          <div class="whisper-bubble-time">${formatTime(w.created_at)}</div>
+        </div>
+        ${isSent ? avatarHtml : ''}
+      </div>`;
+  }
 
-    if (whispers.length === 0) {
+  async function loadWhispers(reset) {
+    if (reset) whisperOffset = 0;
+    const list = $('#whisper-list');
+    const whispers = await db.getWhispers(WHISPER_PAGE, whisperOffset, partnerProfile?.id);
+
+    if (whispers.length === 0 && reset) {
       list.innerHTML = '<p class="empty-hint">还没有悄悄话，发一条吧</p>';
       return;
     }
@@ -1172,39 +1205,25 @@
         lastDate = dateStr;
         html += `<div class="whisper-date-divider">${formatDate(dateStr)}</div>`;
       }
-      const emotionEmoji = EMOTIONS.find(e => e.name === w.emotion)?.emoji || '💬';
-      const isSent = w.sender === (myProfile?.nickname || '');
-      const senderLabel = isSent ? '' : `<div class="whisper-bubble-sender">${escapeHtml(partnerProfile?.nickname || 'TA')}</div>`;
-
-      // 头像：收到的消息显示对方头像，发出的显示自己头像
-      const avatarProfile = isSent ? myProfile : partnerProfile;
-      const avatarUrl = avatarProfile?.avatar_url;
-      const avatarFallback = isSent ? '😊' : '💕';
-      const avatarHtml = avatarUrl
-        ? `<div class="whisper-avatar" style="background-image:url(${avatarUrl})"></div>`
-        : `<div class="whisper-avatar whisper-avatar-emoji">${avatarFallback}</div>`;
-
-      html += `
-        <div class="whisper-row ${isSent ? 'sent' : 'received'}">
-          ${isSent ? '' : avatarHtml}
-          <div class="whisper-bubble">
-            ${senderLabel}
-            <div class="whisper-bubble-emotion">${emotionEmoji}</div>
-            <div>${escapeHtml(w.content)}</div>
-            <div class="whisper-bubble-time">${formatTime(w.created_at)}</div>
-          </div>
-          ${isSent ? avatarHtml : ''}
-        </div>
-      `;
+      html += buildWhisperHTML(w);
     });
-    list.innerHTML = html;
-    list.scrollTop = list.scrollHeight;
+
+    if (reset) {
+      list.innerHTML = html;
+    } else {
+      list.insertAdjacentHTML('afterbegin', html);
+    }
+
+    whisperOffset += whispers.length;
+    $('#whisper-load-more').classList.toggle('hidden', whispers.length < WHISPER_PAGE);
+
+    if (reset) list.scrollTop = list.scrollHeight;
   }
 
   function setupWhisperRealtime() {
     if (whisperSub) whisperSub.unsubscribe();
     whisperSub = db.subscribeToWhispers(payload => {
-      if (currentTab === 'whispers') loadWhispers();
+      if (currentTab === 'whispers') loadWhispers(true);
     });
   }
 
@@ -1212,10 +1231,54 @@
     if (timelineSub) timelineSub.unsubscribe();
     timelineSub = db.subscribeToTimelineEvents(payload => {
       if (currentTab === 'timeline') {
-        timelineLastCount = parseInt($('#timeline-event-count').textContent) + 1 || 0;
-        loadTimeline(true);
+        insertRealtimeTimelineCard(payload);
       }
     });
+  }
+
+  function insertRealtimeTimelineCard(eventData) {
+    if (document.querySelector(`.timeline-event[data-id="${eventData.id}"]`)) return;
+
+    const container = $('#timeline-container');
+    if (!container) return;
+    // 清除空状态
+    const emptyEl = container.querySelector('.timeline-empty');
+    if (emptyEl) emptyEl.remove();
+
+    const d = new Date(eventData.date);
+    const dateStr = `${d.getMonth() + 1}月${d.getDate()}日`;
+    const locationStr = [eventData.city, eventData.place].filter(Boolean).join(' · ');
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'timeline-event';
+    wrapper.dataset.id = eventData.id;
+    wrapper.innerHTML = `
+      <div class="timeline-event-dot"></div>
+      <div class="timeline-event-card">
+        <div class="timeline-event-header">
+          <div class="timeline-event-date">${dateStr}</div>
+          <div class="timeline-event-actions">
+            <button class="timeline-event-edit" data-id="${eventData.id}" title="编辑">✏️</button>
+            <button class="timeline-event-delete" data-id="${eventData.id}" title="删除">🗑️</button>
+          </div>
+        </div>
+        ${eventData.note ? `<div class="timeline-event-note">${escapeHtml(eventData.note)}</div>` : ''}
+        ${locationStr ? `<div class="timeline-event-location">${escapeHtml(locationStr)}</div>` : ''}
+        ${eventData.image ? `<img src="${eventData.image}" alt="" class="timeline-event-image" loading="lazy" onclick="document.getElementById('lightbox').classList.remove('hidden');document.getElementById('lightbox-img').src='${eventData.image}'">` : ''}
+      </div>
+    `;
+
+    wrapper.querySelector('.timeline-event-edit').addEventListener('click', function () {
+      startEditTimelineEvent(this.dataset.id);
+    });
+    wrapper.querySelector('.timeline-event-delete').addEventListener('click', function () {
+      deleteTimelineEvent(this.dataset.id);
+    });
+
+    insertTimelineCard(wrapper, eventData.date);
+
+    timelineLastCount = timelineLastCount + 1;
+    $('#timeline-event-count').textContent = `${timelineLastCount} 个共同回忆`;
   }
 
   async function sendWhisper() {
@@ -1226,7 +1289,7 @@
     try {
       await db.sendWhisper(getIdentity(), emotion, content);
       $('#whisper-input').value = '';
-      await loadWhispers();
+      await loadWhispers(true);
     } catch (e) {
       console.error('发送悄悄话失败:', e);
       showToast('发送失败');
@@ -1578,6 +1641,7 @@
     $('#timeline-save-btn').addEventListener('click', saveTimelineEvent);
     $('#timeline-load-more').addEventListener('click', () => loadTimeline(false));
     $('#timeline-sort-btn').addEventListener('click', toggleTimelineSort);
+    $('#whisper-load-more').addEventListener('click', () => loadWhispers(false));
 
     // 悄悄话 Tab
     renderWhisperEmotionSelect();

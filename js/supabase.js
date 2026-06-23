@@ -238,16 +238,18 @@ const db = {
   // ==================== QUOTES ====================
 
   async getAvailableQuote(mood) {
-    // 排除自己写的（只看对方写的）+ 排除自己已拆过的
+    if (!this._userId) return null;
     const { data } = await this.client
       .from('quotes')
       .select('*')
       .eq('mood', mood)
       .eq('used', false)
-      .neq('user_id', this._userId)
       .not('used_by', 'cs', `{${this._userId}}`);
     if (!data || data.length === 0) return null;
-    return data[Math.floor(Math.random() * data.length)];
+    // JS层过滤：排除自己写的，但保留种子数据(user_id=null)
+    const available = data.filter(q => q.user_id !== this._userId);
+    if (available.length === 0) return null;
+    return available[Math.floor(Math.random() * available.length)];
   },
 
   async markQuoteUsed(id) {
@@ -318,12 +320,20 @@ const db = {
     return data;
   },
 
-  async getWhispers(limit = 50) {
-    const { data } = await this.client
+  async getWhispers(limit = 20, offset = 0, partnerUserId = null) {
+    let query = this.client
       .from('whispers')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
+    if (this._userId) {
+      if (partnerUserId) {
+        query = query.or(`user_id.eq.${this._userId},user_id.eq.${partnerUserId}`);
+      } else {
+        query = query.eq('user_id', this._userId);
+      }
+    }
+    const { data } = await query;
     return (data || []).reverse();
   },
 
@@ -377,11 +387,11 @@ const db = {
     return data;
   },
 
-  async getTimelineEvents(limit = 50, offset = 0) {
+  async getTimelineEvents(limit = 50, offset = 0, ascending = false) {
     const { data, error } = await this.client
       .from('timeline_events')
       .select('*')
-      .order('date', { ascending: false })
+      .order('date', { ascending })
       .range(offset, offset + limit - 1);
     if (error) throw error;
     return data || [];

@@ -974,6 +974,13 @@ body {
     0 2px 8px rgba(60, 50, 40, 0.06);
 }
 
+.quote-count {
+  font-size: 0.65rem;
+  font-weight: 400;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+
 /* 纸团球体 */
 .paper-ball-area {
   display: flex;
