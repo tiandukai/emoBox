@@ -1083,7 +1083,7 @@
     }
   }
 
-  // 编辑时间轴事件
+  // 编辑时间轴事件（含图片编辑）
   async function startEditTimelineEvent(id) {
     const wrapper = $(`.timeline-event[data-id="${id}"]`);
     if (!wrapper) return;
@@ -1094,6 +1094,49 @@
     const events = await db.getTimelineEvents(100, 0);
     const event = events.find(e => e.id === id);
     if (!event) { showToast('记录不存在'); return; }
+
+    // 编辑状态：已有图片、被删索引、新选文件
+    let existingImages = getTimelineImages(event);
+    let removedIndices = new Set();
+    let newPhotos = [];
+
+    function renderEditImages() {
+      const container = card.querySelector('.tl-edit-images');
+      if (!container) return;
+      const kept = existingImages.filter((_, i) => !removedIndices.has(i));
+      const newPreviews = newPhotos.map(f => ({ url: URL.createObjectURL(f), isNew: true }));
+      const all = [
+        ...kept.map(url => ({ url, isNew: false })),
+        ...newPreviews
+      ];
+      container.innerHTML = all.map((img, i) => `
+        <div class="photo-thumb" data-edit-img="${i}">
+          <img src="${img.url}" alt="">
+          <button class="photo-thumb-remove" data-edit-img="${i}">✕</button>
+        </div>
+      `).join('');
+      container.querySelectorAll('.photo-thumb-remove').forEach(btn => {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          const idx = parseInt(this.dataset.editImg);
+          // 重新计算：前 kept 个是旧图，后面是新选
+          if (idx < kept.length) {
+            // 删除的是旧图 → 找到原始索引
+            let count = 0;
+            for (let j = 0; j < existingImages.length; j++) {
+              if (!removedIndices.has(j)) {
+                if (count === idx) { removedIndices.add(j); break; }
+                count++;
+              }
+            }
+          } else {
+            // 删除的是新图
+            newPhotos.splice(idx - kept.length, 1);
+          }
+          renderEditImages();
+        });
+      });
+    }
 
     card.innerHTML = `
       <div class="tl-edit-field">
@@ -1114,11 +1157,30 @@
         <label>描述</label>
         <textarea class="tl-edit-note" rows="2" placeholder="记录...">${escapeHtml(event.note || '')}</textarea>
       </div>
+      <div class="tl-edit-field">
+        <label>图片</label>
+        <div class="tl-edit-images"></div>
+        <button class="tl-edit-add-photo">+ 添加图片</button>
+        <input type="file" accept="image/*" multiple class="tl-edit-photo-input hidden">
+      </div>
       <div class="tl-edit-btns">
         <button class="tl-edit-cancel">取消</button>
         <button class="tl-edit-save">保存</button>
       </div>
     `;
+
+    // 初始渲染已有图片
+    renderEditImages();
+
+    // 添加图片按钮
+    const photoInput = card.querySelector('.tl-edit-photo-input');
+    card.querySelector('.tl-edit-add-photo').addEventListener('click', () => photoInput.click());
+    photoInput.addEventListener('change', () => {
+      const files = Array.from(photoInput.files);
+      files.forEach(f => newPhotos.push(f));
+      renderEditImages();
+      photoInput.value = '';
+    });
 
     // 取消 → 重新加载恢复原样
     card.querySelector('.tl-edit-cancel').addEventListener('click', () => loadTimeline(true));
@@ -1133,6 +1195,21 @@
       };
       if (!updates.date) { showToast('请选择日期'); return; }
       try {
+        // 上传新图片
+        const newUrls = [];
+        for (const f of newPhotos) {
+          try {
+            const compressed = await compressImage(f);
+            const result = await db.uploadImage(compressed);
+            newUrls.push(result.url);
+          } catch (e) { console.error('[编辑] 图片上传失败:', e); }
+        }
+        // 合并：保留未删旧图 + 新上传
+        const kept = existingImages.filter((_, i) => !removedIndices.has(i));
+        const allImages = [...kept, ...newUrls];
+        updates.images = allImages;
+        updates.image = allImages[0] || null;
+
         await db.updateTimelineEvent(id, updates);
         showToast('已更新');
         playPaperPlane();

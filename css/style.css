@@ -1509,6 +1509,28 @@ body {
   background: #D84B63;
 }
 
+.tl-edit-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tl-edit-add-photo {
+  padding: 6px 14px;
+  border: 1px dashed #D7CCC8;
+  border-radius: 8px;
+  background: #FFF;
+  color: #8D6E63;
+  font-size: 0.8rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.tl-edit-add-photo:active {
+  background: #F5F0EB;
+}
+
 /* 时间轴空状态 */
 .timeline-empty {
   text-align: center;
